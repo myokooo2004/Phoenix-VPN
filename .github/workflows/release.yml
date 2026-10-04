@@ -76,12 +76,20 @@ jobs:
         run: |
           mkdir -p release-artifacts
 
+          APP_VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          if [ -z "$APP_VERSION" ]; then
+            echo "Error: could not read versionName from app/build.gradle.kts" >&2
+            exit 1
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_OUTPUT
+          echo "App version: $APP_VERSION"
+
           VERSION="${{ github.event.inputs.release_tag }}"
           if [ -z "$VERSION" ]; then
             if [[ "${{ github.ref }}" == refs/tags/* ]]; then
               VERSION="${GITHUB_REF#refs/tags/}"
             else
-              VERSION="v1.0.0-$(date +'%Y%m%d%H%M')"
+              VERSION="v${APP_VERSION}-$(date +'%Y%m%d%H%M')"
             fi
           fi
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
@@ -91,11 +99,12 @@ jobs:
             echo "Error: release APK not found at $APK_SRC" >&2
             exit 1
           fi
-          cp "$APK_SRC" "release-artifacts/PhoenixVPN-v1.0.apk"
-          echo "APK: $(du -h release-artifacts/PhoenixVPN-v1.0.apk | cut -f1)"
+          APK_NAME="PhoenixVPN-v${APP_VERSION}.apk"
+          cp "$APK_SRC" "release-artifacts/$APK_NAME"
+          echo "APK: $(du -h "release-artifacts/$APK_NAME" | cut -f1)"
 
           cd release-artifacts
-          sha256sum PhoenixVPN-v1.0.apk > PhoenixVPN-v1.0-checksum.sha256
+          sha256sum "$APK_NAME" > "${APK_NAME%.apk}-checksum.sha256"
           cd ..
           ls -lh release-artifacts/
 
@@ -118,7 +127,7 @@ jobs:
             ### ဖီးနစ် VPN — Release
 
             Lightweight WireGuard VPN — endpoints auto-fetched & verified:
-            - **`PhoenixVPN-v1.0.apk`** — universal APK (no scanner, lean)
+            - **`PhoenixVPN-v${{ steps.prepare_artifacts.outputs.APP_VERSION }}.apk`** — universal APK (no scanner, lean)
             - **Min SDK**: Android 7.0 (API 24)
             - **Target SDK**: Android 16 (API 36)
           files: |
