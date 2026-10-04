@@ -737,7 +737,7 @@ class WireGuardManager(private val context: Context) {
         private const val TAG = "PhoenixVpnManager"
 
         /** rx stall window before the watchdog forces a re-handshake. */
-        private const val WATCHDOG_STALL_MS = 60_000L
+        private const val WATCHDOG_STALL_MS = 20_000L
         /** Max re-handshakes per stall episode (resets when rx moves again). */
         private const val WATCHDOG_MAX_REBINDS = 3
 
