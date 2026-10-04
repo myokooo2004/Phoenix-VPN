@@ -412,6 +412,7 @@ private data class Quad(val text: String, val color: Color, val dot: Color, val 
 
 @Composable
 private fun AppBar(viewModel: VpnViewModel) {
+    val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -450,6 +451,18 @@ private fun AppBar(viewModel: VpnViewModel) {
                     onClick = {
                         menuOpen = false
                         viewModel.openAbout()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("App info", color = TextPrimary) },
+                    onClick = {
+                        menuOpen = false
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
                     }
                 )
             }
