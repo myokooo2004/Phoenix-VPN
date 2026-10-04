@@ -90,6 +90,8 @@ class WireGuardManager(private val context: Context) {
 
     // Current underlying network (not the VPN network).
     private var currentUnderlyingNetwork: Network? = null
+    /** Last-seen VALIDATED state of the underlying network (for edge detection). */
+    private var wasValidated = false
 
     init {
         registerNetworkCallback()
@@ -499,14 +501,16 @@ class WireGuardManager(private val context: Context) {
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     currentUnderlyingNetwork = network
-                    onNetworkEvent()
+                    // No debounce here: onCapabilitiesChanged will signal
+                    // VALIDATED, which is the prompt reconnect trigger.
                 }
 
                 override fun onLost(network: Network) {
                     if (currentUnderlyingNetwork == network) {
                         currentUnderlyingNetwork = null
                     }
-                    onNetworkEvent()
+                    wasValidated = false
+                    onNetworkLost()
                 }
 
                 override fun onCapabilitiesChanged(
@@ -514,7 +518,14 @@ class WireGuardManager(private val context: Context) {
                     networkCapabilities: NetworkCapabilities
                 ) {
                     currentUnderlyingNetwork = network
-                    onNetworkEvent()
+                    val validatedNow = networkCapabilities.hasCapability(
+                        NetworkCapabilities.NET_CAPABILITY_VALIDATED
+                    )
+                    val justValidated = validatedNow && !wasValidated
+                    wasValidated = validatedNow
+                    if (justValidated) {
+                        onNetworkValidated()
+                    }
                 }
             }
             networkCallback = callback
@@ -538,17 +549,31 @@ class WireGuardManager(private val context: Context) {
     }
 
     /**
-     * Called on every underlying-network change (3s debounce), then the
-     * auto-tunnel rules are applied.
+     * Internet-LOST path: short ~1s debounce (flap protection), then the
+     * auto-tunnel rules are applied (they stop the tunnel: no usable net).
      *
      * NOTE: unlike the legacy build, this does NOT clear userOverride here.
      * A manual VPN-off must stick through network events; only an explicit
      * user action (tap connect / enable auto-run) clears it.
      */
-    private fun onNetworkEvent() {
+    private fun onNetworkLost() {
+        scheduleRulesCheck(delayMs = 1000L)
+    }
+
+    /**
+     * Internet-GAINED path: fired when NET_CAPABILITY_VALIDATED newly appears
+     * on the underlying (non-VPN) network. No 3s debounce — the rules run
+     * promptly (≤500ms) so auto-reconnect lands within 2–3s of the OS
+     * declaring the network usable.
+     */
+    private fun onNetworkValidated() {
+        scheduleRulesCheck(delayMs = 500L)
+    }
+
+    private fun scheduleRulesCheck(delayMs: Long) {
         autoTunnelJob?.cancel()
         autoTunnelJob = scope.launch(Dispatchers.IO) {
-            delay(3000) // Fixed 3s Debounce
+            delay(delayMs)
 
             // Rebind if connected (Xiaomi-specific stalls).
             val tunnel = currentTunnel
