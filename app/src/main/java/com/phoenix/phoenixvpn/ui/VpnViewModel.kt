@@ -20,6 +20,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -291,7 +293,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         for (e in candidates) {
-            currentCoroutineContext().ensureActive()
+            currentCoroutineContext().job.ensureActive()
             if (e.id == excludeId) continue
             _ui.update { it.copy(statusLine = "Connecting… ${e.id}") }
             val cfg = manager.swapEndpoint(conf, e.id)
