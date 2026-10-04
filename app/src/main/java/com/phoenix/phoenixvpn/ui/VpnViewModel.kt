@@ -82,7 +82,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
      * re-checks — no reliance on winning a resume race.
      */
     private val _batteryExemptionRequest = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val batteryExemptionRequest: SharedFlow<Unit> = _batteryExemptionRequest.asSharedFlow()
+    val batteryExemptionRequest: SharedFlow<Unit> = _batteryExemptionRequest
     private val _batteryCheckTick = MutableStateFlow(0)
     val batteryCheckTick: StateFlow<Int> = _batteryCheckTick.asStateFlow()
 
