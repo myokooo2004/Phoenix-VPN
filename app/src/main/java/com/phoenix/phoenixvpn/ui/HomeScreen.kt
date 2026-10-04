@@ -331,7 +331,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
             Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
                 Text(text = "Endpoints", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = "Auto-fetched · verified on your line · updated ${ui.updatedAgo}",
+                    text = "Auto-fetched · publisher order · updated ${ui.updatedAgo}",
                     color = TextMuted,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -394,7 +394,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
             title = { Text("ဖီးနစ် VPN", color = TextPrimary) },
             text = {
                 Text(
-                    "Lightweight WireGuard VPN.\nEndpoints are auto-fetched and verified on your line.\n\nDeveloped by ဖီးနစ် (ထူးကြီး)",
+                    "Lightweight WireGuard VPN.\nEndpoints are auto-fetched in publisher order.\n\nDeveloped by ဖီးနစ် (ထူးကြီး)",
                     color = TextSecondary,
                     fontSize = 13.sp
                 )

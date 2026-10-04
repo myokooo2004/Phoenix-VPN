@@ -13,12 +13,13 @@ import com.phoenix.phoenixvpn.network.EndpointInfo
 import com.phoenix.phoenixvpn.network.EndpointService
 import com.phoenix.phoenixvpn.vpn.EndpointStore
 import com.phoenix.phoenixvpn.vpn.TunnelConnectionState
-import com.phoenix.phoenixvpn.vpn.VerifiedEndpoint
 import com.phoenix.phoenixvpn.vpn.WireGuardManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,11 +28,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Micro-progress phases of the tap-to-connect flow (honest UI). */
-enum class SetupPhase { IDLE, FETCHING_CONFIG, FETCHING_ENDPOINTS, VERIFYING }
+enum class SetupPhase { IDLE, FETCHING_CONFIG, FETCHING_ENDPOINTS }
 
 data class EndpointRow(
     val id: String,          // "ip:port"
-    val ms: Long?,           // own verified ms, else publisher ms
+    val ms: Long?,           // publisher ms
     val isBest: Boolean,
     val isCurrent: Boolean,
     val isManual: Boolean
@@ -77,7 +78,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // Restore persisted state into the manager (auto-run rules need it).
         val conf = store.baseConf
-        val cur = store.currentEndpoint ?: store.best3.firstOrNull()?.id
+        val cur = store.currentEndpoint ?: store.effectiveList().firstOrNull()?.id
             ?: EndpointStore.BUNDLED.first().id
         if (conf != null) {
             pushDefaultTunnel(conf, cur)
@@ -103,7 +104,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 ) {
                     // Fresh connect: drop the transient micro-progress text.
                     // (newBestAvailable survives — it clears when the user
-                    // switches to the new #1 or a re-verify refreshes best-3.)
+                    // switches to the new #1.)
                     _ui.update { it.copy(statusLine = null) }
                 }
                 lastConnState = cur
@@ -143,7 +144,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     // ============================================================
 
     fun onPowerTap() {
-        // Tapping during the setup flow cancels it (fetch/verify stages).
+        // Tapping during the setup flow cancels it (fetch/connect stages).
         if (_ui.value.phase != SetupPhase.IDLE) {
             cancelConnectFlow()
             return
@@ -173,7 +174,9 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Tap-to-connect flow:
      *   internet → fetch .conf (if missing) → fetch endpoints.json (if stale)
-     *   → VPN permission → verify 10 (if needed) → connect best #1.
+     *   → VPN permission → connect with failover (publisher order, first
+     *   handshake within ~5s wins; no pre-verification, so the VPN icon
+     *   never flickers).
      * Any step may abort back to disconnected with a toast reason.
      */
     fun connectFlow() {
@@ -199,21 +202,18 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 // 3. Endpoints (only when the cache is stale).
-                var fetchedNew = false
                 if (store.isCacheStale(now())) {
                     setPhase(SetupPhase.FETCHING_ENDPOINTS, "Fetching endpoints…")
                     val res = EndpointService.fetch()
                     if (res.isSuccess) {
                         val f = res.getOrThrow()
-                        val oldTop = store.effectiveList().firstOrNull()?.id
                         store.saveFetched(f, now())
-                        fetchedNew = f.endpoints.firstOrNull()?.id != oldTop
                     }
                     // Failure: keep cache / bundled silently — never fatal.
                 }
                 refreshUpdatedAgo()
 
-                // 4. VPN permission — needed for handshake verify AND connect.
+                // 4. VPN permission — needed for connect.
                 // Requested just-in-time, after the fetches.
                 if (manager.checkVpnPermission() != null) {
                     val granted = awaitPermission()
@@ -223,37 +223,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // 5. Verify (only when the list is new or nothing verified yet).
-                if (fetchedNew || store.needsVerify(now())) {
-                    setPhase(SetupPhase.VERIFYING, "Verifying…")
-                    val candidates = store.effectiveList()
-                    val verified: List<VerifiedEndpoint> =
-                        manager.verifyEndpoints(conf, candidates.map { it.ip to it.port })
-                    if (verified.isEmpty()) {
-                        message("No working endpoint found")
-                        return@launch
-                    }
-                    val best3 = verified.take(3).map {
-                        EndpointInfo(it.ip, it.port, it.ms, null)
-                    }
-                    val oldTop = store.best3.firstOrNull()?.id
-                    store.best3 = best3
-                    store.best3VerifiedAt = now()
-                    // Fresh verification: best-3 is current again.
-                    _ui.update { it.copy(newBestAvailable = false) }
-                    if (oldTop != null && oldTop != best3.first().id &&
-                        vpnState.value.connectionState == TunnelConnectionState.CONNECTED
-                    ) {
-                        _ui.update { it.copy(newBestAvailable = true) }
-                    }
-                }
-                refreshUiRows()
-
-                // 6. Connect.
+                // 5. Connect with failover in publisher order: published
+                // top-10 → bundled → manual. First handshake (~5s each)
+                // wins and stays connected.
                 setPhase(SetupPhase.IDLE, "Connecting…")
                 manager.setUserOverride(false)
-                val target = pickTarget()
-                connectTo(target, conf)
+                refreshUiRows()
+                if (!connectWithFailover(conf, excludeId = null)) {
+                    message("No working endpoint found")
+                }
             } finally {
                 if (vpnState.value.connectionState != TunnelConnectionState.CONNECTED &&
                     vpnState.value.connectionState != TunnelConnectionState.CONNECTING
@@ -280,23 +258,77 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Fail over to the next best endpoint when the current one dies. */
+    /**
+     * Try each candidate endpoint in order, waiting up to ~5s for the first
+     * handshake rx. The first handshake wins and stays connected.
+     * Order: stored current endpoint (explicit user choice / last winner)
+     * first, then published list (publisher order) → bundled → manual,
+     * deduped. Returns true on the first working endpoint, false if all
+     * failed.
+     */
+    private suspend fun connectWithFailover(conf: String, excludeId: String?): Boolean {
+        val seen = LinkedHashSet<String>()
+        val candidates = mutableListOf<EndpointInfo>()
+        fun add(e: EndpointInfo) {
+            if (seen.add(e.id)) candidates.add(e)
+        }
+        store.effectiveList().forEach { add(it) }
+        EndpointStore.BUNDLED.forEach { add(it) }
+        store.manualEndpoint?.let { raw ->
+            val i = raw.lastIndexOf(':')
+            if (i > 0) {
+                val port = raw.substring(i + 1).toIntOrNull() ?: 500
+                add(EndpointInfo(raw.substring(0, i), port, null, null))
+            }
+        }
+        // Honor an explicit selection / last working endpoint first.
+        val cur = store.currentEndpoint
+        if (cur != null && cur != excludeId) {
+            val idx = candidates.indexOfFirst { it.id == cur }
+            if (idx > 0) {
+                val e = candidates.removeAt(idx)
+                candidates.add(0, e)
+            }
+        }
+        for (e in candidates) {
+            ensureActive()
+            if (e.id == excludeId) continue
+            _ui.update { it.copy(statusLine = "Connecting… ${e.id}") }
+            val cfg = manager.swapEndpoint(conf, e.id)
+            val ok = try {
+                manager.startTunnelAndAwaitHandshake(manager.tunnelNameFor(e.id), cfg, 5000L)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                false
+            }
+            if (ok) {
+                store.currentEndpoint = e.id
+                pushDefaultTunnel(conf, e.id)
+                refreshUiRows()
+                _ui.update { it.copy(currentMs = e.ms) }
+                return true
+            }
+        }
+        return false
+    }
+
+    /** Fail over to the next endpoint when the current one dies. */
     private fun failover(reason: String) {
         if (manager.isUserOverride()) return
         val st = vpnState.value.connectionState
         if (st != TunnelConnectionState.CONNECTED && st != TunnelConnectionState.CONNECTING) return
         val cur = _ui.value.currentId
-        val next = store.best3.firstOrNull { it.id != cur }?.id
-            ?: EndpointStore.BUNDLED.firstOrNull { it.id != cur }?.id
-            ?: return
-        message(reason)
         val conf = store.baseConf ?: return
+        message(reason)
         viewModelScope.launch {
             try {
                 manager.stopTunnel()
             } catch (_: Exception) {
             }
-            connectTo(next, conf)
+            if (!connectWithFailover(conf, excludeId = cur)) {
+                message("No working endpoint found")
+            }
         }
     }
 
@@ -451,31 +483,16 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /** Which endpoint to connect to: current if known, else best #1. */
-    private fun pickTarget(): String {
-        val cur = store.currentEndpoint
-        val manual = store.manualEndpoint
-        if (cur != null) {
-            // Manual selection always wins.
-            if (cur == manual) return cur
-            if (store.best3.any { it.id == cur }) return cur
-            if (EndpointStore.BUNDLED.any { it.id == cur }) return cur
-        }
-        return store.best3.firstOrNull()?.id
-            ?: EndpointStore.BUNDLED.first().id
-    }
-
     private fun msFor(id: String?): Long? {
         if (id == null) return null
-        store.best3.firstOrNull { it.id == id }?.ms?.let { return it }
         return store.effectiveList().firstOrNull { it.id == id }?.ms
     }
 
     private fun refreshUiRows() {
-        val best = store.best3.ifEmpty { EndpointStore.BUNDLED }
-        val cur = store.currentEndpoint ?: best.firstOrNull()?.id
+        val top3 = store.effectiveList().take(3)
+        val cur = store.currentEndpoint ?: top3.firstOrNull()?.id
         val manual = store.manualEndpoint
-        val rows = best.mapIndexed { i, e ->
+        val rows = top3.mapIndexed { i, e ->
             EndpointRow(
                 id = e.id,
                 ms = e.ms,

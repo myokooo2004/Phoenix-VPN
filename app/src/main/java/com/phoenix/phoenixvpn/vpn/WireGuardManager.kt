@@ -48,15 +48,6 @@ data class VpnUiState(
     val errorMessage: String? = null
 )
 
-/** An endpoint proven alive by a real WireGuard handshake, with measured ms. */
-data class VerifiedEndpoint(
-    val ip: String,
-    val port: Int,
-    val ms: Long
-) {
-    val id: String get() = "$ip:$port"
-}
-
 class WireGuardManager(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var statsJob: Job? = null
@@ -233,77 +224,93 @@ class WireGuardManager(private val context: Context) {
     }
 
     // ============================================================
-    //  Endpoint verification — real WireGuard handshake per endpoint
+    //  Connect with handshake wait (failover primitive)
     // ============================================================
-    // No scanner engine in this app: verification brings the GoBackend tunnel
-    // up once per candidate with ONLY the Endpoint line swapped, and watches
-    // for the first received byte (the handshake response). ms = time from
-    // tunnel UP to first rx. Requires the VPN permission to be granted first
-    // (the UI flow requests it before verifying). Never touches _vpnState or
-    // the foreground notification; the active tunnel must be down when this
-    // runs (callers guarantee it).
-    suspend fun verifyEndpoints(
-        baseConf: String,
-        endpoints: List<Pair<String, Int>>,
-        perEndpointTimeoutMs: Long = 4000L
-    ): List<VerifiedEndpoint> = withContext(Dispatchers.IO) {
-        val out = mutableListOf<VerifiedEndpoint>()
-        if (endpoints.isEmpty()) return@withContext out
-        acquireLocks()
+    // Bring the tunnel UP for one endpoint and wait for the first handshake
+    // response (rx > 0) up to [timeoutMs]. True = handshake completed: the
+    // tunnel stays UP, stats polling runs, locks are held (same connected
+    // state as [startTunnel]). False = timeout/failure: the tunnel is
+    // brought back DOWN and the foreground service stopped, so the caller
+    // can try the next endpoint. Never touches the auto-run rules.
+    suspend fun startTunnelAndAwaitHandshake(
+        name: String,
+        configContent: String,
+        timeoutMs: Long = 5000L
+    ): Boolean = withContext(Dispatchers.IO) {
         try {
-            for ((ip, port) in endpoints) {
-                if (!isActive) break
-                val ms = verifyOne(baseConf, ip, port, perEndpointTimeoutMs)
-                if (ms != null) out.add(VerifiedEndpoint(ip, port, ms))
+            _vpnState.update {
+                it.copy(
+                    connectionState = TunnelConnectionState.CONNECTING,
+                    activeTunnelName = name,
+                    errorMessage = null
+                )
             }
-        } finally {
-            releaseLocks()
-        }
-        out.sortedBy { it.ms }
-    }
 
-    private suspend fun verifyOne(
-        baseConf: String,
-        ip: String,
-        port: Int,
-        timeoutMs: Long
-    ): Long? {
-        val configText = swapEndpoint(baseConf, "$ip:$port")
-        val parsed = try {
-            Config.parse(ByteArrayInputStream(configText.toByteArray(Charsets.UTF_8)))
-        } catch (_: Exception) {
-            return null
-        }
-        val tunnel = PhoenixTunnel("phxverify") { }
-        return try {
-            val start = SystemClock.elapsedRealtime()
-            backend.setState(tunnel, Tunnel.State.UP, parsed)
-            var ms: Long? = null
-            val deadline = start + timeoutMs
+            VpnForegroundService.start(context)
+
+            val parsedConfig = Config.parse(
+                ByteArrayInputStream(configContent.toByteArray(Charsets.UTF_8))
+            )
+            currentConfig = parsedConfig
+
+            // Empty state callback: _vpnState is driven manually below, so a
+            // racy backend UP event can't mark us CONNECTED before the first
+            // handshake byte arrives.
+            val tunnel = PhoenixTunnel(name) { }
+            currentTunnel = tunnel
+
+            backend.setState(tunnel, Tunnel.State.UP, parsedConfig)
+
+            var handshakeOk = false
+            val deadline = SystemClock.elapsedRealtime() + timeoutMs
             while (SystemClock.elapsedRealtime() < deadline) {
-                delay(250)
+                if (!isActive) break
                 val rx = try {
                     backend.getStatistics(tunnel)?.totalRx() ?: 0L
                 } catch (_: Exception) {
                     0L
                 }
                 if (rx > 0) {
-                    ms = SystemClock.elapsedRealtime() - start
+                    handshakeOk = true
                     break
                 }
+                delay(250)
             }
-            try {
-                backend.setState(tunnel, Tunnel.State.DOWN, null)
-            } catch (_: Exception) {
+
+            if (!handshakeOk) {
+                try {
+                    backend.setState(tunnel, Tunnel.State.DOWN, null)
+                } catch (_: Exception) {
+                }
+                handleBackendState(name, Tunnel.State.DOWN)
+                currentTunnel = null
+                currentConfig = null
+                VpnForegroundService.stop(context)
+                return@withContext false
             }
-            ms
+
+            handleBackendState(name, Tunnel.State.UP)
+            startStatsPolling(tunnel)
+            acquireLocks()
+            true
         } catch (e: Exception) {
-            Log.d(TAG, "verify $ip:$port failed: ${e.message}")
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.d(TAG, "connect $name failed: ${e.message}")
             try {
-                backend.setState(tunnel, Tunnel.State.DOWN, null)
+                currentTunnel?.let { backend.setState(it, Tunnel.State.DOWN, null) }
             } catch (_: Exception) {
             }
-            null
+            currentTunnel = null
+            currentConfig = null
+            VpnForegroundService.stop(context)
+            _vpnState.update {
+                it.copy(
+                    connectionState = TunnelConnectionState.DISCONNECTED,
+                    activeTunnelName = null,
+                    errorMessage = null
+                )
+            }
+            false
         }
     }
 

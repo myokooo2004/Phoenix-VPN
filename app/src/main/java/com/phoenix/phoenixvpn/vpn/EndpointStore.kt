@@ -10,7 +10,7 @@ import org.json.JSONObject
 /**
  * All persisted endpoint/config state, SharedPreferences-backed.
  *
- * Fallback chain: fetched best-3 → cached best-3 → bundled defaults → manual.
+ * Fallback chain: published list (publisher order) → bundled defaults → manual.
  */
 class EndpointStore(context: Context) {
 
@@ -20,15 +20,6 @@ class EndpointStore(context: Context) {
     var baseConf: String?
         get() = prefs.getString(KEY_CONF, null)
         set(v) = prefs.edit().putString(KEY_CONF, v).apply()
-
-    /** Best-3 verified endpoints, JSON array of {ip,port,ms}. */
-    var best3: List<EndpointInfo>
-        get() = parseList(prefs.getString(KEY_BEST3, null))
-        set(v) = prefs.edit().putString(KEY_BEST3, serialize(v)).apply()
-
-    var best3VerifiedAt: Long
-        get() = prefs.getLong(KEY_BEST3_AT, 0L)
-        set(v) = prefs.edit().putLong(KEY_BEST3_AT, v).apply()
 
     /** Raw fetched endpoints.json cache. */
     var cachedEndpoints: List<EndpointInfo>
@@ -68,10 +59,6 @@ class EndpointStore(context: Context) {
     fun isCacheStale(now: Long): Boolean =
         cachedAt == 0L || now - cachedAt > CACHE_TTL_MS
 
-    /** True when the best-3 needs a fresh handshake verification. */
-    fun needsVerify(now: Long): Boolean =
-        best3.isEmpty() || now - best3VerifiedAt > VERIFY_TTL_MS
-
     /** Effective endpoint list: cached file, else bundled defaults. */
     fun effectiveList(): List<EndpointInfo> =
         cachedEndpoints.ifEmpty { BUNDLED }
@@ -109,8 +96,6 @@ class EndpointStore(context: Context) {
     companion object {
         private const val PREFS = "phoenix_endpoints"
         private const val KEY_CONF = "base_conf"
-        private const val KEY_BEST3 = "best3"
-        private const val KEY_BEST3_AT = "best3_at"
         private const val KEY_CACHED = "cached"
         private const val KEY_CACHED_AT = "cached_at"
         private const val KEY_PUBLISHED_AT = "published_at"
@@ -120,8 +105,6 @@ class EndpointStore(context: Context) {
 
         /** Re-download endpoints.json after this long. */
         const val CACHE_TTL_MS = 6 * 60 * 60 * 1000L
-        /** Re-verify the best-3 after this long. */
-        const val VERIFY_TTL_MS = 30 * 60 * 1000L
         /** "updated X ago" goes amber after this long. */
         const val STALE_MS = 48 * 60 * 60 * 1000L
 
