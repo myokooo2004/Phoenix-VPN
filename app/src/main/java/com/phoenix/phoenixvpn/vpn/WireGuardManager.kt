@@ -148,6 +148,8 @@ class WireGuardManager(private val context: Context) {
 
     fun isUserOverride(): Boolean = userOverride
 
+    fun isAutoRunEnabled(): Boolean = isAutoRunEnabled
+
     /** Push the base .conf + selected endpoint the auto-run rules should use. */
     fun setDefaultTunnel(name: String?, configText: String?) {
         defaultName = name

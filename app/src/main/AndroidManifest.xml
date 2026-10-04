@@ -41,6 +41,15 @@
             android:stopWithTask="false"
             tools:ignore="ForegroundServicePermission" />
 
+        <!-- Boot receiver: re-arm auto-run after reboot -->
+        <receiver
+            android:name=".vpn.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

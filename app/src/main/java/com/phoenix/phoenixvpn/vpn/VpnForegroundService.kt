@@ -42,6 +42,22 @@ class VpnForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * App swiped away from recents: resurrect the service ONLY if the VPN
+     * should be up (auto-run on, no manual-off). Never resurrect after a
+     * manual-off — the user's wish sticks.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        try {
+            val manager = WireGuardManager.getInstance(this)
+            if (manager.isAutoRunEnabled() && !manager.isUserOverride()) {
+                start(this)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
