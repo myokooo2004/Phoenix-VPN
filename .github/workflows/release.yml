@@ -1,0 +1,130 @@
+name: Build Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '*.*.*'
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      release_title:
+        description: 'Release Title'
+        required: false
+        default: 'ဖီးနစ် VPN v1.0 (Phone Release)'
+      release_tag:
+        description: 'Release Tag'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
+
+jobs:
+  build-release:
+    name: Build Phone APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+
+      - name: Prepare Keystore for Signing
+        run: |
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "ERROR: KEYSTORE_BASE64 secret is not set" >&2
+            exit 1
+          fi
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > phoenix-release.jks
+          echo "Keystore decoded at $(pwd)/phoenix-release.jks"
+
+      - name: Make Gradlew Executable
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/phoenix-release.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Prepare Artifacts
+        id: prepare_artifacts
+        run: |
+          mkdir -p release-artifacts
+
+          VERSION="${{ github.event.inputs.release_tag }}"
+          if [ -z "$VERSION" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              VERSION="${GITHUB_REF#refs/tags/}"
+            else
+              VERSION="v1.0.0-$(date +'%Y%m%d%H%M')"
+            fi
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+          APK_SRC="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$APK_SRC" ]; then
+            echo "Error: release APK not found at $APK_SRC" >&2
+            exit 1
+          fi
+          cp "$APK_SRC" "release-artifacts/PhoenixVPN-v1.0.apk"
+          echo "APK: $(du -h release-artifacts/PhoenixVPN-v1.0.apk | cut -f1)"
+
+          cd release-artifacts
+          sha256sum PhoenixVPN-v1.0.apk > PhoenixVPN-v1.0-checksum.sha256
+          cd ..
+          ls -lh release-artifacts/
+
+      - name: Upload APK as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phoenix-vpn-release
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: ${{ steps.prepare_artifacts.outputs.VERSION }}
+          name: ${{ github.event.inputs.release_title || steps.prepare_artifacts.outputs.VERSION }}
+          body: |
+            ### ဖီးနစ် VPN — Release
+
+            Lightweight WireGuard VPN — endpoints auto-fetched & verified:
+            - **`PhoenixVPN-v1.0.apk`** — universal APK (no scanner, lean)
+            - **Min SDK**: Android 7.0 (API 24)
+            - **Target SDK**: Android 16 (API 36)
+          files: |
+            release-artifacts/*.apk
+            release-artifacts/*.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
