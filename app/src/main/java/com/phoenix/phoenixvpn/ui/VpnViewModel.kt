@@ -16,6 +16,7 @@ import com.phoenix.phoenixvpn.vpn.TunnelConnectionState
 import com.phoenix.phoenixvpn.vpn.VerifiedEndpoint
 import com.phoenix.phoenixvpn.vpn.WireGuardManager
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -404,7 +405,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     //  Background refresh
     // ============================================================
 
-    private suspend fun backgroundRefresh() {
+    private suspend fun CoroutineScope.backgroundRefresh() {
         while (isActive) {
             try {
                 val now = now()
