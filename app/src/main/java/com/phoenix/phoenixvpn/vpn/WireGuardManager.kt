@@ -192,6 +192,10 @@ class WireGuardManager(private val context: Context) {
 
             val resultState = backend.setState(tunnel, Tunnel.State.UP, parsedConfig)
             handleBackendState(name, resultState)
+            // Service is already in the foreground (or was just re-delivered
+            // via startForegroundService on the running service): mirror the
+            // connected state into its notification.
+            VpnForegroundService.updateTunnelState(context, connected = true)
             startStatsPolling(tunnel)
             acquireLocks()
         } catch (e: Exception) {
@@ -205,7 +209,19 @@ class WireGuardManager(private val context: Context) {
         }
     }
 
-    suspend fun stopTunnel() = withContext(Dispatchers.IO) {
+    /**
+     * Bring the tunnel DOWN.
+     *
+     * @param keepService when true, the foreground service (and its
+     * notification) is kept alive while the tunnel goes down. Used for the
+     * automatic no-internet stop: on internet return, [startTunnel] can then
+     * re-establish the tunnel without a background startForegroundService()
+     * call, which Android 12+ would reject with
+     * ForegroundServiceStartNotAllowedException. The notification is updated
+     * to the honest idle state. Manual paths keep the default false: a real
+     * manual-off stops the service entirely.
+     */
+    suspend fun stopTunnel(keepService: Boolean = false) = withContext(Dispatchers.IO) {
         val tunnel = currentTunnel ?: return@withContext
         try {
             _vpnState.update { it.copy(connectionState = TunnelConnectionState.DISCONNECTING) }
@@ -215,9 +231,15 @@ class WireGuardManager(private val context: Context) {
             handleBackendState(tunnel.name, resultState)
             currentTunnel = null
             currentConfig = null
-            VpnForegroundService.stop(context)
+            if (keepService) {
+                VpnForegroundService.updateTunnelState(context, connected = false)
+            } else {
+                VpnForegroundService.stop(context)
+            }
         } catch (e: Exception) {
-            VpnForegroundService.stop(context)
+            if (!keepService) {
+                VpnForegroundService.stop(context)
+            }
             _vpnState.update {
                 it.copy(
                     connectionState = TunnelConnectionState.ERROR,
@@ -294,6 +316,7 @@ class WireGuardManager(private val context: Context) {
             }
 
             handleBackendState(name, Tunnel.State.UP)
+            VpnForegroundService.updateTunnelState(context, connected = true)
             startStatsPolling(tunnel)
             acquireLocks()
             true
@@ -617,8 +640,8 @@ class WireGuardManager(private val context: Context) {
             if (_vpnState.value.connectionState == TunnelConnectionState.CONNECTED ||
                 _vpnState.value.connectionState == TunnelConnectionState.CONNECTING
             ) {
-                Log.d(TAG, "No usable network → stopping tunnel")
-                stopTunnel()
+                Log.d(TAG, "No usable network → stopping tunnel (service kept alive)")
+                stopTunnel(keepService = true)
             }
             return
         }
