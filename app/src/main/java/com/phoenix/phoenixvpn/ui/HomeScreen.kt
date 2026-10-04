@@ -10,6 +10,7 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,9 +20,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -35,14 +38,16 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -85,6 +90,7 @@ import com.phoenix.phoenixvpn.ui.theme.TextSecondary
 import com.phoenix.phoenixvpn.vpn.TunnelConnectionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private enum class HeroState { IDLE, WORKING, CONNECTED, ERROR }
 
@@ -332,33 +338,38 @@ fun HomeScreen(viewModel: VpnViewModel) {
         }
     }
 
-    // Endpoint bottom sheet
+    // Endpoint sheet — floating card (all 4 corners rounded)
     if (ui.sheetOpen) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
+        Dialog(
             onDismissRequest = { viewModel.closeSheet() },
-            sheetState = sheetState,
-            containerColor = Surface,
-            scrimColor = Color(0x99000000)
+            properties = DialogProperties(
+                dismissOnClickOutside = true,
+                dismissOnBackPress = true,
+                usePlatformDefaultWidth = false
+            )
         ) {
-            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-                Text(text = "Endpoints", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    text = "Auto-fetched · publisher order · updated ${ui.updatedAgo}",
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
-                )
-                ui.rows.forEach { row ->
-                    EndpointSheetRow(row) { viewModel.selectEndpoint(row.id) }
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                FloatingEndpointSheet(onDismiss = { viewModel.closeSheet() }) {
+                    Text(text = "Endpoints", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "Auto-fetched · publisher order · updated ${ui.updatedAgo}",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                    )
+                    ui.rows.forEach { row ->
+                        EndpointSheetRow(row) { viewModel.selectEndpoint(row.id) }
+                    }
+                    ManualSheetRow(
+                        manualId = ui.manualId,
+                        isCurrent = ui.manualId != null && ui.manualId == ui.currentId,
+                        onSelect = { ui.manualId?.let { viewModel.selectEndpoint(it) } },
+                        onEdit = { viewModel.openManualDialog() }
+                    )
                 }
-                ManualSheetRow(
-                    manualId = ui.manualId,
-                    isCurrent = ui.manualId != null && ui.manualId == ui.currentId,
-                    onSelect = { ui.manualId?.let { viewModel.selectEndpoint(it) } },
-                    onEdit = { viewModel.openManualDialog() }
-                )
-                Spacer(Modifier.height(30.dp))
             }
         }
     }
@@ -707,6 +718,61 @@ private fun Stat(value: String, unit: String?, label: String, dim: Boolean) {
             letterSpacing = 1.sp,
             modifier = Modifier.padding(top = 4.dp)
         )
+    }
+}
+
+/**
+ * Floating bottom-sheet card: side + bottom margins, all 4 corners rounded
+ * (24dp), elevated. Drag handle on top; downward drag past threshold
+ * dismisses, otherwise snaps back.
+ */
+@Composable
+private fun FloatingEndpointSheet(
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val sheetShape = RoundedCornerShape(24.dp)
+    val offsetY = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .padding(bottom = 28.dp)
+            .offset { IntOffset(0, offsetY.value.roundToInt()) }
+            .shadow(12.dp, sheetShape)
+            .clip(sheetShape)
+            .background(Surface)
+            .border(1.dp, CardBorder, sheetShape)
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragEnd = {
+                        scope.launch {
+                            if (offsetY.value > 120f) onDismiss()
+                            else offsetY.animateTo(0f, tween(200))
+                        }
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        scope.launch {
+                            offsetY.snapTo((offsetY.value + dragAmount).coerceAtLeast(0f))
+                        }
+                    }
+                )
+            }
+            .padding(horizontal = 20.dp)
+            .padding(top = 8.dp, bottom = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(bottom = 12.dp)
+                .width(40.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color(0xFF3A3F45))
+        )
+        content()
     }
 }
 
