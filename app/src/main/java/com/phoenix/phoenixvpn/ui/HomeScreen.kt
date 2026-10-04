@@ -1,6 +1,11 @@
 package com.phoenix.phoenixvpn.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -35,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -48,11 +54,15 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.phoenix.phoenixvpn.ui.theme.Amber
 import com.phoenix.phoenixvpn.ui.theme.Bg
 import com.phoenix.phoenixvpn.ui.theme.Border
@@ -100,11 +110,19 @@ fun HomeScreen(viewModel: VpnViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(Bg)
-            .padding(horizontal = 20.dp)
             .padding(top = 18.dp, bottom = 28.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            AppBar(viewModel)
+            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                AppBar(viewModel)
+            }
+            // Battery-protection strip: full-bleed, only when not exempted.
+            BatteryStrip()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 20.dp)
+            ) {
             Spacer(Modifier.height(26.dp))
 
             // Status
@@ -282,6 +300,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                     .padding(top = 14.dp),
                 textAlign = TextAlign.Center
             )
+            } // end padded content column
         }
 
         // Message snackbar
@@ -435,6 +454,77 @@ private fun AppBar(viewModel: VpnViewModel) {
                 )
             }
         }
+    }
+}
+
+/**
+ * Slim battery-protection strip below the app bar, visible only when the app
+ * is NOT exempted from battery optimization. Re-checked on every resume.
+ */
+@Composable
+private fun BatteryStrip() {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+
+    fun isExempted(): Boolean {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        return pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+    }
+
+    var exempted by remember { mutableStateOf(isExempted()) }
+
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                exempted = isExempted()
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+
+    if (exempted) return
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF101214))
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "🔋", fontSize = 14.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Background protection off — VPN may be killed",
+                color = Color(0xFF9AA0A6),
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = {
+                    context.startActivity(
+                        Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                    )
+                }
+            ) {
+                Text(
+                    text = "Fix",
+                    color = Teal,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Color(0xFF1C1E20))
+        )
     }
 }
 
