@@ -50,6 +50,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +82,7 @@ import com.phoenix.phoenixvpn.ui.theme.TextPrimary
 import com.phoenix.phoenixvpn.ui.theme.TextSecondary
 import com.phoenix.phoenixvpn.vpn.TunnelConnectionState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private enum class HeroState { IDLE, WORKING, CONNECTED, ERROR }
 
@@ -481,15 +483,20 @@ private fun AppBar(viewModel: VpnViewModel) {
 
 /**
  * Slim battery-protection strip below the app bar, visible only when the app
- * is NOT exempted from battery optimization. Re-checked on every resume, and
- * force re-checked ~1s after returning from the exemption screen (via
- * viewModel.batteryCheckTick) so a grant reliably hides it on the first tap.
+ * is NOT exempted from battery optimization. On every resume the exemption is
+ * checked immediately; if not yet granted, re-checks run at +1s/+2s/+3s/+5s
+ * (stop early on grant) so slow setting propagation or a missing
+ * ActivityResult callback (HyperOS/Xiaomi) can't leave the strip stuck.
+ * Tapping the strip forces an immediate re-check. The launcher +
+ * viewModel.batteryCheckTick path is kept as a backup for devices where the
+ * callback does fire.
  */
 @Composable
 private fun BatteryStrip(viewModel: VpnViewModel) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val checkTick by viewModel.batteryCheckTick.collectAsState()
+    val scope = rememberCoroutineScope()
 
     fun isExempted(): Boolean {
         val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -498,10 +505,27 @@ private fun BatteryStrip(viewModel: VpnViewModel) {
 
     var exempted by remember { mutableStateOf(isExempted()) }
 
+    // Retry window: on some devices (HyperOS/Xiaomi) the ActivityResult
+    // callback for ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS never fires
+    // and the setting propagates slowly, so a single ON_RESUME check races
+    // ("needs 2 taps"). Re-check at +1/+2/+3/+5s after every resume; stop
+    // early as soon as the exemption is observed.
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                exempted = isExempted()
+                if (isExempted()) {
+                    exempted = true
+                } else {
+                    scope.launch {
+                        for (waitMs in longArrayOf(1000L, 2000L, 3000L, 5000L)) {
+                            delay(waitMs)
+                            if (isExempted()) {
+                                exempted = true
+                                break
+                            }
+                        }
+                    }
+                }
             }
         }
         lifecycle.addObserver(observer)
@@ -523,6 +547,9 @@ private fun BatteryStrip(viewModel: VpnViewModel) {
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xFF101214))
+                // Tapping the strip itself forces an immediate re-check — covers
+                // grants done manually through system Settings.
+                .clickable { exempted = isExempted() }
                 .padding(horizontal = 20.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
