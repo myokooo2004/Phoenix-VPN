@@ -71,6 +71,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.phoenix.phoenixvpn.ui.theme.Amber
 import com.phoenix.phoenixvpn.ui.theme.Bg
 import com.phoenix.phoenixvpn.ui.theme.Border
+import com.phoenix.phoenixvpn.ui.theme.CardBorder
+import com.phoenix.phoenixvpn.ui.theme.CardSurface
 import com.phoenix.phoenixvpn.ui.theme.Green
 import com.phoenix.phoenixvpn.ui.theme.HeroRingIdle
 import com.phoenix.phoenixvpn.ui.theme.PaleYellow
@@ -210,8 +212,8 @@ fun HomeScreen(viewModel: VpnViewModel) {
                     .padding(horizontal = 8.dp)
                     .shadow(6.dp, RoundedCornerShape(18.dp))
                     .clip(RoundedCornerShape(18.dp))
-                    .background(Surface)
-                    .border(1.dp, Border, RoundedCornerShape(18.dp))
+                    .background(CardSurface)
+                    .border(1.dp, CardBorder, RoundedCornerShape(18.dp))
                     .clickable { viewModel.openSheet() }
                     .padding(15.dp, 16.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -490,12 +492,19 @@ private fun AppBar(viewModel: VpnViewModel) {
  * Tapping the strip forces an immediate re-check. The launcher +
  * viewModel.batteryCheckTick path is kept as a backup for devices where the
  * callback does fire.
+ *
+ * Grant persistence: HyperOS/Xiaomi reports isIgnoringBatteryOptimizations()
+ * unreliably — a config change (dark/light mode switch) recreates the
+ * activity, the fresh check reads false, and the strip wrongly reappears.
+ * So every observed grant is persisted via viewModel.confirmBatteryExemption()
+ * and the strip stays hidden once confirmed for this install.
  */
 @Composable
 private fun BatteryStrip(viewModel: VpnViewModel) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val checkTick by viewModel.batteryCheckTick.collectAsState()
+    val confirmed by viewModel.batteryExemptionConfirmed.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun isExempted(): Boolean {
@@ -503,7 +512,15 @@ private fun BatteryStrip(viewModel: VpnViewModel) {
         return pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
     }
 
-    var exempted by remember { mutableStateOf(isExempted()) }
+    // Any observed grant is persisted so the strip never reappears for this
+    // install, even if a later check (e.g. after a config change) misreads.
+    fun refreshExemption(): Boolean {
+        val ok = isExempted()
+        if (ok) viewModel.confirmBatteryExemption()
+        return ok
+    }
+
+    var exempted by remember { mutableStateOf(refreshExemption()) }
 
     // Retry window: on some devices (HyperOS/Xiaomi) the ActivityResult
     // callback for ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS never fires
@@ -513,13 +530,13 @@ private fun BatteryStrip(viewModel: VpnViewModel) {
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                if (isExempted()) {
+                if (refreshExemption()) {
                     exempted = true
                 } else {
                     scope.launch {
                         for (waitMs in longArrayOf(1000L, 2000L, 3000L, 5000L)) {
                             delay(waitMs)
-                            if (isExempted()) {
+                            if (refreshExemption()) {
                                 exempted = true
                                 break
                             }
@@ -536,11 +553,11 @@ private fun BatteryStrip(viewModel: VpnViewModel) {
     // to propagate, so this re-check is the reliable one.
     LaunchedEffect(checkTick) {
         if (checkTick > 0) {
-            exempted = isExempted()
+            exempted = refreshExemption()
         }
     }
 
-    if (exempted) return
+    if (exempted || confirmed) return
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -549,7 +566,7 @@ private fun BatteryStrip(viewModel: VpnViewModel) {
                 .background(Color(0xFF101214))
                 // Tapping the strip itself forces an immediate re-check — covers
                 // grants done manually through system Settings.
-                .clickable { exempted = isExempted() }
+                .clickable { exempted = refreshExemption() }
                 .padding(horizontal = 20.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -695,11 +712,17 @@ private fun Stat(value: String, unit: String?, label: String, dim: Boolean) {
 
 @Composable
 private fun EndpointSheetRow(row: EndpointRow, onTap: () -> Unit) {
+    val cardShape = RoundedCornerShape(16.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .shadow(4.dp, cardShape)
+            .clip(cardShape)
+            .background(CardSurface)
+            .border(1.dp, CardBorder, cardShape)
             .clickable { onTap() }
-            .padding(vertical = 13.dp, horizontal = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(

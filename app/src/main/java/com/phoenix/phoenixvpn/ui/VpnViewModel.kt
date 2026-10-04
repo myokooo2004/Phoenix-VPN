@@ -94,6 +94,30 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         _batteryCheckTick.value += 1
     }
 
+    /**
+     * Battery-exemption grant persistence. On HyperOS/Xiaomi
+     * PowerManager.isIgnoringBatteryOptimizations() is unreliable — it can
+     * return false even after the user granted the exemption, so a config
+     * change (e.g. dark/light mode switch) recreates the activity, the fresh
+     * check reads false, and the strip wrongly reappears. Once ANY check
+     * observes the exemption as granted, we persist it locally; the strip
+     * then stays hidden for this install (survives config changes and
+     * process death). Clearing app data resets it.
+     */
+    private val uiPrefs =
+        application.getSharedPreferences("phoenix_vpn_ui", Context.MODE_PRIVATE)
+    private val _batteryExemptionConfirmed =
+        MutableStateFlow(uiPrefs.getBoolean("battery_exemption_confirmed", false))
+    val batteryExemptionConfirmed: StateFlow<Boolean> =
+        _batteryExemptionConfirmed.asStateFlow()
+
+    fun confirmBatteryExemption() {
+        if (!_batteryExemptionConfirmed.value) {
+            _batteryExemptionConfirmed.value = true
+            uiPrefs.edit().putBoolean("battery_exemption_confirmed", true).apply()
+        }
+    }
+
     private var connectJob: Job? = null
     private var tickerJob: Job? = null
     private var lastBackgroundFetchAt: Long = 0L

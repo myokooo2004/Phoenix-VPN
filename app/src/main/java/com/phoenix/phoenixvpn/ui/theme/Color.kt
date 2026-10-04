@@ -14,3 +14,7 @@ val PaleYellow = Color(0xFFA08C55)
 val Amber = Color(0xFFB98A2F)
 val Border = Color(0xFF1C1E20)
 val HeroRingIdle = Color(0xFF33373B)
+// Elevated card surfaces — must read as a distinct layer on the black theme
+// (a shadow alone is invisible dark-on-dark).
+val CardSurface = Color(0xFF1D2126)
+val CardBorder = Color(0xFF30363D)
