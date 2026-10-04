@@ -125,7 +125,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 AppBar(viewModel)
             }
             // Battery-protection strip: full-bleed, only when not exempted.
-            BatteryStrip()
+            BatteryStrip(viewModel)
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -206,6 +206,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp)
+                    .shadow(4.dp, RoundedCornerShape(14.dp))
                     .clip(RoundedCornerShape(14.dp))
                     .background(Surface)
                     .border(1.dp, Border, RoundedCornerShape(14.dp))
@@ -480,12 +481,15 @@ private fun AppBar(viewModel: VpnViewModel) {
 
 /**
  * Slim battery-protection strip below the app bar, visible only when the app
- * is NOT exempted from battery optimization. Re-checked on every resume.
+ * is NOT exempted from battery optimization. Re-checked on every resume, and
+ * force re-checked ~1s after returning from the exemption screen (via
+ * viewModel.batteryCheckTick) so a grant reliably hides it on the first tap.
  */
 @Composable
-private fun BatteryStrip() {
+private fun BatteryStrip(viewModel: VpnViewModel) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val checkTick by viewModel.batteryCheckTick.collectAsState()
 
     fun isExempted(): Boolean {
         val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -502,6 +506,14 @@ private fun BatteryStrip() {
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
+    }
+
+    // Fired ~1s after the exemption screen returns: the setting has had time
+    // to propagate, so this re-check is the reliable one.
+    LaunchedEffect(checkTick) {
+        if (checkTick > 0) {
+            exempted = isExempted()
+        }
     }
 
     if (exempted) return
@@ -523,14 +535,7 @@ private fun BatteryStrip() {
                 modifier = Modifier.weight(1f)
             )
             TextButton(
-                onClick = {
-                    context.startActivity(
-                        Intent(
-                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                            Uri.parse("package:${context.packageName}")
-                        )
-                    )
-                }
+                onClick = { viewModel.requestBatteryExemption() }
             ) {
                 Text(
                     text = "Fix",

@@ -4,8 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -16,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import com.phoenix.phoenixvpn.ui.HomeScreen
 import com.phoenix.phoenixvpn.ui.VpnViewModel
 import com.phoenix.phoenixvpn.ui.theme.PhoenixVpnTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -25,6 +28,20 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         viewModel.onVpnPermissionResult(result.resultCode == Activity.RESULT_OK)
+    }
+
+    /**
+     * Battery-exemption screen. The exemption setting can take a moment to
+     * propagate after the user grants it, so we wait ~1s before telling the
+     * strip to re-check — this beats the ON_RESUME race the old flow had.
+     */
+    private val batteryExemptionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        lifecycleScope.launch {
+            delay(1000)
+            viewModel.onBatteryExemptionReturned()
+        }
     }
 
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -58,6 +75,21 @@ class MainActivity : ComponentActivity() {
                     } catch (_: Exception) {
                         viewModel.onVpnPermissionResult(false)
                     }
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            viewModel.batteryExemptionRequest.collect {
+                try {
+                    batteryExemptionLauncher.launch(
+                        Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
+                } catch (_: Exception) {
+                    // Fall through: the ON_RESUME check in the strip remains.
                 }
             }
         }

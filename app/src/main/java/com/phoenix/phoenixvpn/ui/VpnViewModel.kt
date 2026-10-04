@@ -22,7 +22,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -72,6 +74,25 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private val _permissionRequest = MutableStateFlow<Intent?>(null)
     val permissionRequest: StateFlow<Intent?> = _permissionRequest.asStateFlow()
     private var permissionDeferred: CompletableDeferred<Boolean>? = null
+
+    /**
+     * Battery-exemption flow: HomeScreen's strip asks, MainActivity launches the
+     * system screen via ActivityResultLauncher. On return (after a short delay
+     * for the setting to propagate), [batteryCheckTick] bumps and the strip
+     * re-checks — no reliance on winning a resume race.
+     */
+    private val _batteryExemptionRequest = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val batteryExemptionRequest: SharedFlow<Unit> = _batteryExemptionRequest.asSharedFlow()
+    private val _batteryCheckTick = MutableStateFlow(0)
+    val batteryCheckTick: StateFlow<Int> = _batteryCheckTick.asStateFlow()
+
+    fun requestBatteryExemption() {
+        _batteryExemptionRequest.tryEmit(Unit)
+    }
+
+    fun onBatteryExemptionReturned() {
+        _batteryCheckTick.value += 1
+    }
 
     private var connectJob: Job? = null
     private var tickerJob: Job? = null
