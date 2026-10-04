@@ -4,4 +4,5 @@
     <color name="phoenix_surface">#101214</color>
     <color name="phoenix_teal">#4FD1C5</color>
     <color name="phoenix_green">#34D399</color>
+    <color name="phoenix_icon_bg">#FFFFFF</color>
 </resources>
