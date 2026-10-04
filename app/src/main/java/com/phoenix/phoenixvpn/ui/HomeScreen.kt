@@ -208,10 +208,10 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp)
-                    .shadow(4.dp, RoundedCornerShape(14.dp))
-                    .clip(RoundedCornerShape(14.dp))
+                    .shadow(6.dp, RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(18.dp))
                     .background(Surface)
-                    .border(1.dp, Border, RoundedCornerShape(14.dp))
+                    .border(1.dp, Border, RoundedCornerShape(18.dp))
                     .clickable { viewModel.openSheet() }
                     .padding(15.dp, 16.dp),
                 verticalAlignment = Alignment.CenterVertically
