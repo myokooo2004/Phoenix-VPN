@@ -25,7 +25,11 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -84,6 +88,7 @@ import com.phoenix.phoenixvpn.ui.theme.CardSurface
 import com.phoenix.phoenixvpn.ui.theme.Green
 import com.phoenix.phoenixvpn.ui.theme.HeroRingIdle
 import com.phoenix.phoenixvpn.ui.theme.PaleYellow
+import com.phoenix.phoenixvpn.ui.theme.SheetBorder
 import com.phoenix.phoenixvpn.ui.theme.Surface
 import com.phoenix.phoenixvpn.ui.theme.Teal
 import com.phoenix.phoenixvpn.ui.theme.TextDim
@@ -363,24 +368,31 @@ fun HomeScreen(viewModel: VpnViewModel) {
                     ) { viewModel.closeSheet() },
                 contentAlignment = Alignment.BottomCenter
             ) {
-                FloatingEndpointSheet(onDismiss = { viewModel.closeSheet() }) {
-                    Text(text = "Endpoints", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        text = "Auto-fetched · publisher order · updated ${ui.updatedAgo}",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
-                    )
-                    ui.rows.forEach { row ->
-                        EndpointSheetRow(row) { viewModel.selectEndpoint(row.id) }
+                FloatingEndpointSheet(
+                    onDismiss = { viewModel.closeSheet() },
+                    header = {
+                        Text(text = "Endpoints", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = "Auto-fetched · publisher order · updated ${ui.updatedAgo}",
+                            color = TextMuted,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 3.dp)
+                        )
+                    },
+                    rows = {
+                        ui.rows.forEach { row ->
+                            EndpointSheetRow(row) { viewModel.selectEndpoint(row.id) }
+                        }
+                    },
+                    footer = {
+                        ManualSheetRow(
+                            manualId = ui.manualId,
+                            isCurrent = ui.manualId != null && ui.manualId == ui.currentId,
+                            onSelect = { ui.manualId?.let { viewModel.selectEndpoint(it) } },
+                            onEdit = { viewModel.openManualDialog() }
+                        )
                     }
-                    ManualSheetRow(
-                        manualId = ui.manualId,
-                        isCurrent = ui.manualId != null && ui.manualId == ui.currentId,
-                        onSelect = { ui.manualId?.let { viewModel.selectEndpoint(it) } },
-                        onEdit = { viewModel.openManualDialog() }
-                    )
-                }
+                )
             }
         }
     }
@@ -740,21 +752,27 @@ private fun Stat(value: String, unit: String?, label: String, dim: Boolean) {
 @Composable
 private fun FloatingEndpointSheet(
     onDismiss: () -> Unit,
-    content: @Composable ColumnScope.() -> Unit
+    header: @Composable ColumnScope.() -> Unit,
+    rows: @Composable ColumnScope.() -> Unit,
+    footer: @Composable ColumnScope.() -> Unit
 ) {
     val sheetShape = RoundedCornerShape(24.dp)
     val offsetY = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
+    // Max 72% of screen height so the card fits any phone size; the inner
+    // endpoint list scrolls when it overflows.
+    val maxSheetHeight = LocalConfiguration.current.screenHeightDp.dp * 0.72f
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .navigationBarsPadding()
+            .heightIn(max = maxSheetHeight)
             .offset { IntOffset(0, offsetY.value.roundToInt()) }
             .shadow(12.dp, sheetShape)
             .clip(sheetShape)
             .background(Surface)
-            .border(1.dp, CardBorder, sheetShape)
+            .border(1.dp, SheetBorder, sheetShape)
             // Consume taps on the card itself so they don't reach the
             // dialog's outside-tap dismiss (rows keep their own onTap).
             .clickable(
@@ -777,20 +795,40 @@ private fun FloatingEndpointSheet(
                         }
                     }
                 )
-            }
-            .padding(horizontal = 20.dp)
-            .padding(top = 8.dp, bottom = 12.dp),
+            },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
+        // Fixed header: drag handle + title.
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(bottom = 10.dp)
+                    .width(40.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFF3A3F45))
+            )
+            header()
+        }
+        // Scrollable endpoint rows.
+        Column(
             modifier = Modifier
-                .padding(bottom = 12.dp)
-                .width(40.dp)
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(Color(0xFF3A3F45))
-        )
-        content()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+        ) {
+            rows()
+        }
+        // Pinned footer: manual endpoint row, always visible.
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            footer()
+        }
     }
 }
 
@@ -800,19 +838,19 @@ private fun EndpointSheetRow(row: EndpointRow, onTap: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 3.dp)
             .shadow(4.dp, cardShape)
             .clip(cardShape)
             .background(CardSurface)
             .border(1.dp, CardBorder, cardShape)
             .clickable { onTap() }
-            .padding(horizontal = 14.dp, vertical = 14.dp),
+            .padding(horizontal = 12.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = row.id,
             color = TextPrimary,
-            fontSize = 15.sp,
+            fontSize = 13.sp,
             modifier = Modifier.weight(1f)
         )
         // Fixed 56dp BEST slot — ms column stays aligned.
@@ -821,26 +859,26 @@ private fun EndpointSheetRow(row: EndpointRow, onTap: () -> Unit) {
                 Text(
                     text = "BEST",
                     color = Color(0xFF0B0C0E),
-                    fontSize = 10.sp,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.5.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .background(Teal)
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
                 )
             }
         }
         // Fixed 26dp check slot.
         Box(modifier = Modifier.width(26.dp)) {
             if (row.isCurrent) {
-                Text(text = "✓", color = Green, fontSize = 18.sp)
+                Text(text = "✓", color = Green, fontSize = 16.sp)
             }
         }
         Text(
             text = row.ms?.let { "$it ms" } ?: "",
             color = TextSecondary,
-            fontSize = 13.sp
+            fontSize = 12.sp
         )
     }
 }
@@ -856,30 +894,30 @@ private fun ManualSheetRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { if (manualId != null) onSelect() else onEdit() }
-            .padding(vertical = 13.dp, horizontal = 4.dp),
+            .padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (manualId != null) {
             Text(
                 text = manualId,
                 color = TextPrimary,
-                fontSize = 15.sp,
+                fontSize = 13.sp,
                 modifier = Modifier.weight(1f)
             )
             Box(modifier = Modifier.width(56.dp))
             Box(modifier = Modifier.width(26.dp)) {
-                if (isCurrent) Text(text = "✓", color = Green, fontSize = 18.sp)
+                if (isCurrent) Text(text = "✓", color = Green, fontSize = 16.sp)
             }
             Text(
                 text = "✎",
                 color = Teal,
-                fontSize = 16.sp,
+                fontSize = 14.sp,
                 modifier = Modifier.clickable { onEdit() }.padding(4.dp)
             )
         } else {
-            Text(text = "＋", color = Teal, fontSize = 20.sp)
+            Text(text = "＋", color = Teal, fontSize = 17.sp)
             Spacer(Modifier.width(12.dp))
-            Text(text = "Manual endpoint", color = TextSecondary, fontSize = 15.sp)
+            Text(text = "Manual endpoint", color = TextSecondary, fontSize = 13.sp)
         }
     }
 }

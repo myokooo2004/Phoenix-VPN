@@ -18,3 +18,5 @@ val HeroRingIdle = Color(0xFF33373B)
 // (a shadow alone is invisible dark-on-dark).
 val CardSurface = Color(0xFF1D2126)
 val CardBorder = Color(0xFF30363D)
+// Floating sheet card stroke — visible on black, not too thick (1dp).
+val SheetBorder = Color(0xFF3F4750)
