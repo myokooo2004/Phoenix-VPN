@@ -165,11 +165,17 @@ private fun WorldMapBackground() {
             radius = glowRadius,
             center = glowCenter
         )
-        // Dotted world map silhouette.
+        // Dotted world map silhouette: centered 2:1 box with SQUARE cells.
+        // Never stretched — the mask keeps its proportions on any screen.
         val rows = WORLD_MAP.size
-        val cellW = size.width / MAP_COLS
-        val cellH = size.height / rows
-        val dotR = minOf(cellW, cellH) * 0.24f
+        val boxW = size.width * 0.94f
+        val boxH = boxW / 2f
+        val cell = minOf(boxW / MAP_COLS, boxH / rows)
+        val gridW = cell * MAP_COLS
+        val gridH = cell * rows
+        val startX = (size.width - gridW) / 2f
+        val startY = size.height * 0.07f + (boxH - gridH) / 2f
+        val dotR = cell * 0.28f
         val dotColor = Color.White.copy(alpha = 0.09f)
         for (r in 0 until rows) {
             val line = WORLD_MAP[r].padEnd(MAP_COLS, ' ').take(MAP_COLS)
@@ -178,7 +184,7 @@ private fun WorldMapBackground() {
                     drawCircle(
                         color = dotColor,
                         radius = dotR,
-                        center = Offset((c + 0.5f) * cellW, (r + 0.5f) * cellH)
+                        center = Offset(startX + (c + 0.5f) * cell, startY + (r + 0.5f) * cell)
                     )
                 }
             }
@@ -401,13 +407,11 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 )
             }
 
-            Spacer(Modifier.weight(1f))
-
             // Auto VPN row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 14.dp)
+                    .padding(top = 8.dp)
                     .border(1.dp, Color(0xFF16181A), RoundedCornerShape(0.dp))
                     .padding(top = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -432,7 +436,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 )
             }
 
-            // Footer — just below the Auto VPN card.
+            // Footer — stuck close below the Auto VPN card (mockup).
             Text(
                 text = "Developed by ဖီးနစ် (ထူးကြီး)",
                 color = PaleYellow,
@@ -440,9 +444,12 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 letterSpacing = 0.3.sp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp),
+                    .padding(top = 5.dp),
                 textAlign = TextAlign.Center
             )
+
+            // Flexible space below footer; bottom 28dp padding preserved.
+            Spacer(Modifier.weight(1f))
             } // end padded content column
         }
 
