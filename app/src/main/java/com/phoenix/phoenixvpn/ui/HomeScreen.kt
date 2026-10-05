@@ -15,6 +15,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -350,7 +352,15 @@ fun HomeScreen(viewModel: VpnViewModel) {
             )
         ) {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    // The dialog content fills the screen, so
+                    // dismissOnClickOutside never fires on its own —
+                    // taps outside the card dismiss explicitly here.
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { viewModel.closeSheet() },
                 contentAlignment = Alignment.BottomCenter
             ) {
                 FloatingEndpointSheet(onDismiss = { viewModel.closeSheet() }) {
@@ -739,12 +749,19 @@ private fun FloatingEndpointSheet(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
-            .padding(bottom = 28.dp)
+            .navigationBarsPadding()
             .offset { IntOffset(0, offsetY.value.roundToInt()) }
             .shadow(12.dp, sheetShape)
             .clip(sheetShape)
             .background(Surface)
             .border(1.dp, CardBorder, sheetShape)
+            // Consume taps on the card itself so they don't reach the
+            // dialog's outside-tap dismiss (rows keep their own onTap).
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = {}
+            )
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
                     onDragEnd = {

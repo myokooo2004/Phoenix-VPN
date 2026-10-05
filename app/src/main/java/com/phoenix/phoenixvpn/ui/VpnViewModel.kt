@@ -184,6 +184,24 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             delay(4000)
             backgroundRefresh()
         }
+
+        // Pre-fetch the WireGuard .conf on app start if missing, so the
+        // first connect doesn't stall on "Fetching config…" (pguard is
+        // slow from Myanmar). Silent: no phase UI, no toast — connectFlow
+        // retries with UI feedback if this fails or is skipped.
+        if (store.baseConf.isNullOrBlank()) {
+            viewModelScope.launch {
+                if (!hasValidatedInternet()) return@launch
+                try {
+                    val fetched = ConfigService.fetchWireGuardConfig().getOrNull()
+                    if (fetched != null) {
+                        store.baseConf = fetched.content
+                    }
+                } catch (_: Exception) {
+                    // Silent — connectFlow fetches with UI if still missing.
+                }
+            }
+        }
     }
 
     // ============================================================
