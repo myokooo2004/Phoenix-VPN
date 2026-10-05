@@ -759,8 +759,10 @@ private fun FloatingEndpointSheet(
     val sheetShape = RoundedCornerShape(24.dp)
     val offsetY = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    // Max 72% of screen height so the card fits any phone size; the inner
-    // endpoint list scrolls when it overflows.
+    // Max 72% of screen height so the card fits any phone size. The whole
+    // card scrolls when content overflows. Deliberately NO weight()
+    // anywhere: weight + verticalScroll + heightIn(max) breaks measurement
+    // in Compose and lets the card overflow the screen (v1.14 bug).
     val maxSheetHeight = LocalConfiguration.current.screenHeightDp.dp * 0.72f
     Column(
         modifier = Modifier
@@ -780,27 +782,31 @@ private fun FloatingEndpointSheet(
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = {}
             )
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onDragEnd = {
-                        scope.launch {
-                            if (offsetY.value > 120f) onDismiss()
-                            else offsetY.animateTo(0f, tween(200))
-                        }
-                    },
-                    onVerticalDrag = { change, dragAmount ->
-                        change.consume()
-                        scope.launch {
-                            offsetY.snapTo((offsetY.value + dragAmount).coerceAtLeast(0f))
-                        }
-                    }
-                )
-            },
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Fixed header: drag handle + title.
+        // Header: drag handle + title. Dragging down on the header
+        // dismisses (kept here so it never fights the card scroll).
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 10.dp),
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .padding(top = 8.dp, bottom = 10.dp)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            scope.launch {
+                                if (offsetY.value > 120f) onDismiss()
+                                else offsetY.animateTo(0f, tween(200))
+                            }
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            scope.launch {
+                                offsetY.snapTo((offsetY.value + dragAmount).coerceAtLeast(0f))
+                            }
+                        }
+                    )
+                },
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
@@ -813,16 +819,11 @@ private fun FloatingEndpointSheet(
             )
             header()
         }
-        // Scrollable endpoint rows.
-        Column(
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-        ) {
+        // Endpoint rows.
+        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
             rows()
         }
-        // Pinned footer: manual endpoint row, always visible.
+        // Footer: manual endpoint row.
         Column(
             modifier = Modifier.padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
