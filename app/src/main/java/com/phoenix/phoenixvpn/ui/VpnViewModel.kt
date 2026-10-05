@@ -54,6 +54,8 @@ data class PhoenixUiState(
     val newBestAvailable: Boolean = false,
     val sheetOpen: Boolean = false,
     val manualDialogOpen: Boolean = false,
+    /** null = ADD mode; non-null = EDIT mode for this endpoint id. */
+    val editTargetId: String? = null,
     val aboutOpen: Boolean = false,
     val message: String? = null,
     val connectedAt: Long = 0L,
@@ -431,8 +433,9 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openManualDialog() = _ui.update { it.copy(manualDialogOpen = true) }
-    fun closeManualDialog() = _ui.update { it.copy(manualDialogOpen = false) }
+    fun openManualDialog() = _ui.update { it.copy(manualDialogOpen = true, editTargetId = null) }
+    fun openEditDialog(id: String) = _ui.update { it.copy(manualDialogOpen = true, editTargetId = id) }
+    fun closeManualDialog() = _ui.update { it.copy(manualDialogOpen = false, editTargetId = null) }
 
     fun saveManualEndpoint(raw: String) {
         val v = raw.trim()
@@ -440,12 +443,40 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             message("Use host:port (e.g. 8.34.70.118:500)")
             return
         }
-        store.manualEndpoint = v
+        val target = _ui.value.editTargetId
+        if (target == null) {
+            // ADD mode — single manual slot.
+            store.manualEndpoint = v
+            _ui.update { it.copy(manualId = v) }
+            message("Manual endpoint saved")
+        } else if (target == _ui.value.manualId) {
+            // EDIT mode on the manual endpoint.
+            store.manualEndpoint = v
+            _ui.update { it.copy(manualId = v) }
+            message("Manual endpoint updated")
+        } else {
+            // EDIT mode on an auto-fetched row — persisted display override.
+            store.editedEndpoints = store.editedEndpoints + (target to v)
+            message("Endpoint updated")
+        }
         closeSheet()
         closeManualDialog()
         refreshUiRows()
-        _ui.update { it.copy(manualId = v) }
-        message("Manual endpoint saved")
+    }
+
+    fun deleteEndpoint(id: String) {
+        if (id == _ui.value.manualId) {
+            store.manualEndpoint = null
+            _ui.update { it.copy(manualId = null) }
+        } else {
+            val d = store.deletedEndpoints
+            d.add(id)
+            store.deletedEndpoints = d
+            // Drop any pending edit for the deleted row.
+            store.editedEndpoints = store.editedEndpoints - id
+        }
+        refreshUiRows()
+        message("Endpoint deleted")
     }
 
     fun setAutoRun(enabled: Boolean) {
@@ -554,7 +585,18 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refreshUiRows() {
-        val top3 = store.effectiveList().take(3)
+        val deleted = store.deletedEndpoints
+        val edited = store.editedEndpoints
+        val top3 = store.effectiveList()
+            .filter { it.id !in deleted }
+            .map { e ->
+                val newId = edited[e.id]
+                if (newId != null) {
+                    val parts = newId.split(":")
+                    e.copy(ip = parts[0], port = parts.getOrNull(1)?.toIntOrNull() ?: e.port)
+                } else e
+            }
+            .take(3)
         val cur = store.currentEndpoint ?: top3.firstOrNull()?.id
         val manual = store.manualEndpoint
         val rows = top3.mapIndexed { i, e ->

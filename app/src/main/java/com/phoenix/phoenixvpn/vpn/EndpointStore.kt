@@ -45,6 +45,16 @@ class EndpointStore(context: Context) {
         get() = prefs.getString(KEY_MANUAL, null)
         set(v) = prefs.edit().putString(KEY_MANUAL, v).apply()
 
+    /** User-deleted auto-fetched endpoint ids — hidden from the sheet list. */
+    var deletedEndpoints: MutableSet<String>
+        get() = prefs.getStringSet(KEY_DELETED, emptySet())?.toMutableSet() ?: mutableSetOf()
+        set(v) = prefs.edit().putStringSet(KEY_DELETED, v).apply()
+
+    /** User-edited auto-fetched endpoints: original id -> new "ip:port". */
+    var editedEndpoints: Map<String, String>
+        get() = parseEdited(prefs.getString(KEY_EDITED, null))
+        set(v) = prefs.edit().putString(KEY_EDITED, serializeEdited(v)).apply()
+
     var autoRun: Boolean
         get() = prefs.getBoolean(KEY_AUTORUN, false)
         set(v) = prefs.edit().putBoolean(KEY_AUTORUN, v).apply()
@@ -93,6 +103,25 @@ class EndpointStore(context: Context) {
         }
     }
 
+    private fun parseEdited(s: String?): Map<String, String> {
+        if (s.isNullOrBlank()) return emptyMap()
+        return try {
+            val o = JSONObject(s)
+            buildMap {
+                val keys = o.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    put(k, o.getString(k))
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun serializeEdited(m: Map<String, String>): String =
+        JSONObject(m as Map<*, *>).toString()
+
     companion object {
         private const val PREFS = "phoenix_endpoints"
         private const val KEY_CONF = "base_conf"
@@ -101,6 +130,8 @@ class EndpointStore(context: Context) {
         private const val KEY_PUBLISHED_AT = "published_at"
         private const val KEY_CURRENT = "current"
         private const val KEY_MANUAL = "manual"
+        private const val KEY_DELETED = "deleted_endpoints"
+        private const val KEY_EDITED = "edited_endpoints"
         private const val KEY_AUTORUN = "auto_run"
 
         /** Re-download endpoints.json after this long. */

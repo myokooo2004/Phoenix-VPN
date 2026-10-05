@@ -37,6 +37,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -408,7 +410,12 @@ fun HomeScreen(viewModel: VpnViewModel) {
                     },
                     rows = {
                         ui.rows.forEach { row ->
-                            EndpointSheetRow(row) { viewModel.selectEndpoint(row.id) }
+                            EndpointSheetRow(
+                                row = row,
+                                onTap = { viewModel.selectEndpoint(row.id) },
+                                onEdit = { viewModel.openEditDialog(row.id) },
+                                onDelete = { viewModel.deleteEndpoint(row.id) }
+                            )
                         }
                     },
                     footer = {
@@ -416,7 +423,9 @@ fun HomeScreen(viewModel: VpnViewModel) {
                             manualId = ui.manualId,
                             isCurrent = ui.manualId != null && ui.manualId == ui.currentId,
                             onSelect = { ui.manualId?.let { viewModel.selectEndpoint(it) } },
-                            onEdit = { viewModel.openManualDialog() }
+                            onAdd = { viewModel.openManualDialog() },
+                            onEdit = { ui.manualId?.let { viewModel.openEditDialog(it) } },
+                            onDelete = { ui.manualId?.let { viewModel.deleteEndpoint(it) } }
                         )
                     }
                 )
@@ -424,40 +433,63 @@ fun HomeScreen(viewModel: VpnViewModel) {
         }
     }
 
-    // Manual endpoint dialog
+    // Edit Endpoint dialog (ADD mode from "+ Manual endpoint", EDIT mode from row pencil)
     if (ui.manualDialogOpen) {
-        var text by remember { mutableStateOf(ui.manualId ?: "") }
-        AlertDialog(
-            onDismissRequest = { viewModel.closeManualDialog() },
-            containerColor = Surface,
-            title = { Text("Manual endpoint", color = TextPrimary) },
-            text = {
-                Column {
-                    Text(
-                        "Single slot — used when selected, survives updates.",
-                        color = TextMuted,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        placeholder = { Text("8.34.70.118:500", color = TextDim) },
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.saveManualEndpoint(text) }) {
-                    Text("Save", color = Teal)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.closeManualDialog() }) {
-                    Text("Cancel", color = TextMuted)
+        val target = ui.editTargetId
+        var text by remember(target) { mutableStateOf(target ?: "") }
+        Dialog(onDismissRequest = { viewModel.closeManualDialog() }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Surface)
+                    .border(1.dp, SheetBorder, RoundedCornerShape(24.dp))
+                    .padding(24.dp)
+            ) {
+                Text(
+                    text = "Edit Endpoint",
+                    color = TextPrimary,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Endpoint အသစ်ထည့်ပါ (ဥပမာ - 162.159.192.20:500)",
+                    color = TextSecondary,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Endpoint", color = TextMuted) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp)
+                )
+                Text(
+                    text = "မှတ်ချက် - Save လုပ်လိုက်ပါက Name ကိုလည်း Endpoint ရဲ့ IP အလိုအလျောက် ချိန်းပါမည်။",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 20.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { viewModel.closeManualDialog() }) {
+                        Text("CANCEL", color = TextSecondary, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { viewModel.saveManualEndpoint(text) }) {
+                        Text("SAVE", color = Color(0xFFE5484D), fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
-        )
+        }
     }
 
     // About dialog
@@ -863,7 +895,12 @@ private fun FloatingEndpointSheet(
 }
 
 @Composable
-private fun EndpointSheetRow(row: EndpointRow, onTap: () -> Unit) {
+private fun EndpointSheetRow(
+    row: EndpointRow,
+    onTap: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
     val cardShape = RoundedCornerShape(16.dp)
     Row(
         modifier = Modifier
@@ -910,6 +947,24 @@ private fun EndpointSheetRow(row: EndpointRow, onTap: () -> Unit) {
             color = TextSecondary,
             fontSize = 12.sp
         )
+        Icon(
+            imageVector = Icons.Filled.Edit,
+            contentDescription = "Edit endpoint",
+            tint = Teal,
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .size(16.dp)
+                .clickable { onEdit() }
+        )
+        Icon(
+            imageVector = Icons.Filled.Delete,
+            contentDescription = "Delete endpoint",
+            tint = TextMuted,
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .size(16.dp)
+                .clickable { onDelete() }
+        )
     }
 }
 
@@ -918,12 +973,14 @@ private fun ManualSheetRow(
     manualId: String?,
     isCurrent: Boolean,
     onSelect: () -> Unit,
-    onEdit: () -> Unit
+    onAdd: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { if (manualId != null) onSelect() else onEdit() }
+            .clickable { if (manualId != null) onSelect() else onAdd() }
             .padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -943,6 +1000,12 @@ private fun ManualSheetRow(
                 color = Teal,
                 fontSize = 14.sp,
                 modifier = Modifier.clickable { onEdit() }.padding(4.dp)
+            )
+            Text(
+                text = "🗑",
+                color = TextMuted,
+                fontSize = 14.sp,
+                modifier = Modifier.clickable { onDelete() }.padding(4.dp)
             )
         } else {
             Text(text = "＋", color = Teal, fontSize = 17.sp)
