@@ -12,6 +12,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -54,6 +55,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -104,6 +107,86 @@ import kotlin.math.roundToInt
 
 private enum class HeroState { IDLE, WORKING, CONNECTED, ERROR }
 
+// ---------------------------------------------------------------------------
+// Static backdrop: dotted world map + teal glow (v1.20).
+// Pure decoration — draws once into the render node, never animates, no
+// per-frame redraw, no bitmaps, no blur. Does not participate in layout
+// measurement, so it cannot affect the foreground UI.
+// ---------------------------------------------------------------------------
+private const val MAP_COLS = 60
+
+private val WORLD_MAP = arrayOf(
+    "                                                            ",
+    "                     ####                                   ",
+    "    ##########      ######                                  ",
+    "  ##############     #####     ###   ####                   ",
+    " ################     ###   ##################              ",
+    " #################          #######################        ",
+    "  ################          #########################      ",
+    "  ################           #######################      ",
+    "   ##############            #####################         ",
+    "    ############              ###################          ",
+    "     ##########       ##        ################           ",
+    "      ########       ####        ##############            ",
+    "      #######       ######        ############             ",
+    "       ######      ########        ##########   ##         ",
+    "       ######      #########        ########  #####        ",
+    "        #####     ###########        ######   ######       ",
+    "        #####     ############        ####     #####       ",
+    "         ####     #############        ###      ####       ",
+    "         #####    ##############        ##       ###       ",
+    "          ####    ###############        #        ##       ",
+    "          #####   ################                             ",
+    "          #####   #################                            ",
+    "           ####    #################           ####           ",
+    "           ####    ##################         ######         ",
+    "            ###     ##################         ####          ",
+    "            ###      #################          ##          ",
+    "             ##      ################                             ",
+    "             ##       ##############                             ",
+    "              #        ###########                              ",
+    "                        ########                               ",
+)
+
+@Composable
+private fun WorldMapBackground() {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        // Teal radial glow behind the hero power button area.
+        val glowCenter = Offset(size.width * 0.5f, size.height * 0.30f)
+        val glowRadius = size.width * 0.55f
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Teal.copy(alpha = 0.10f),
+                    Teal.copy(alpha = 0.0f)
+                ),
+                center = glowCenter,
+                radius = glowRadius
+            ),
+            radius = glowRadius,
+            center = glowCenter
+        )
+        // Dotted world map silhouette.
+        val rows = WORLD_MAP.size
+        val cellW = size.width / MAP_COLS
+        val cellH = size.height / rows
+        val dotR = minOf(cellW, cellH) * 0.24f
+        val dotColor = Color.White.copy(alpha = 0.09f)
+        for (r in 0 until rows) {
+            val line = WORLD_MAP[r].padEnd(MAP_COLS, ' ').take(MAP_COLS)
+            for (c in 0 until MAP_COLS) {
+                if (line[c] == '#') {
+                    drawCircle(
+                        color = dotColor,
+                        radius = dotR,
+                        center = Offset((c + 0.5f) * cellW, (r + 0.5f) * cellH)
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(viewModel: VpnViewModel) {
@@ -134,9 +217,14 @@ fun HomeScreen(viewModel: VpnViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(Bg)
-            .padding(top = 18.dp, bottom = 28.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        // Static backdrop behind everything (draws once, no layout impact).
+        WorldMapBackground()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 18.dp, bottom = 28.dp)
+        ) {
             Column(
                 modifier = Modifier
                     .statusBarsPadding()
@@ -345,7 +433,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 )
             }
 
-            // Footer
+            // Footer — just below the Auto VPN card.
             Text(
                 text = "Developed by ဖီးနစ် (ထူးကြီး)",
                 color = PaleYellow,
@@ -353,7 +441,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 letterSpacing = 0.3.sp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 14.dp),
+                    .padding(top = 8.dp),
                 textAlign = TextAlign.Center
             )
             } // end padded content column
