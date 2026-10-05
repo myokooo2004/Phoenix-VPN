@@ -22,7 +22,6 @@ own line, and the best 3 are kept.
 - Validated internet → auto-connect; no usable internet → auto-stop
 - Manual VPN-off (incl. notification "ရပ်ရန်") sets a sticky user override
 - rx-stall watchdog with bounded re-handshakes, then endpoint failover
-- WireGuard config fetched once from `https://pguard.val.run/`
 
 ## Build
 
