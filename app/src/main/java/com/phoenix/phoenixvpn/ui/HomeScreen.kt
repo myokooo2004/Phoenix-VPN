@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalConfiguration
@@ -366,7 +365,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() }
                     ) { viewModel.closeSheet() },
-                contentAlignment = Alignment.BottomCenter
+                contentAlignment = Alignment.Center
             ) {
                 FloatingEndpointSheet(
                     onDismiss = { viewModel.closeSheet() },
@@ -768,7 +767,9 @@ private fun FloatingEndpointSheet(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
-            .navigationBarsPadding()
+            // Centered in the dialog (not bottom-anchored), so no system-bar
+            // inset handling is needed — the 72% max height keeps it far
+            // from status/nav bars on any phone size (v1.16).
             .heightIn(max = maxSheetHeight)
             .offset { IntOffset(0, offsetY.value.roundToInt()) }
             .shadow(12.dp, sheetShape)
