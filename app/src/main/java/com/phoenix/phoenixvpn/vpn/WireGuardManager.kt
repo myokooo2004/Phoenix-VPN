@@ -468,6 +468,19 @@ class WireGuardManager(private val context: Context) {
     //  Locks
     // ============================================================
 
+    /**
+     * 6h tunnel health-check signal for the background refresh. True when the
+     * watchdog has confirmed the live tunnel is degraded — rx stalled a full
+     * WATCHDOG_STALL_MS while tx kept growing — and is re-handshaking, but
+     * hasn't declared the endpoint dead yet. Read-only: no watchdog behavior
+     * is changed. Idle tunnels (tx flat) are never reported degraded, and a
+     * user override is always respected.
+     */
+    fun isTunnelDegraded(): Boolean =
+        _vpnState.value.connectionState == TunnelConnectionState.CONNECTED &&
+            !userOverride &&
+            watchdogRebinds > 0
+
     private fun acquireLocks() {
         try {
             if (wakeLock == null) {

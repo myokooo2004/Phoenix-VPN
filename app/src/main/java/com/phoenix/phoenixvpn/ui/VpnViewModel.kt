@@ -544,21 +544,25 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     val res = EndpointService.fetch()
                     if (res.isSuccess) {
                         val f = res.getOrThrow()
-                        val oldTop = store.effectiveList().firstOrNull()?.id
                         store.saveFetched(f, now())
                         refreshUpdatedAgo()
-                        val newTop = f.endpoints.firstOrNull()?.id
-                        if (oldTop != null && newTop != null && oldTop != newTop &&
+                        val connected =
                             vpnState.value.connectionState == TunnelConnectionState.CONNECTED
-                        ) {
-                            // Never auto-switch a live tunnel; invite a tap.
-                            _ui.update {
-                                it.copy(
-                                    newBestAvailable = true,
-                                    statusLine = "new #1 available — tap to switch"
-                                )
-                            }
+                        if (connected && manager.isTunnelDegraded()) {
+                            // 6h health check: the live tunnel is degraded —
+                            // the watchdog confirmed the rx stall (tx kept
+                            // growing) and is re-handshaking, but hasn't
+                            // declared the endpoint dead yet. Proactively
+                            // fail over to the best endpoint from the fresh
+                            // list. isTunnelDegraded() already respects
+                            // userOverride; failover() re-checks it too.
+                            failover("Line degraded — switching to best endpoint…")
                         }
+                        // NOTE: the old "new #1 available — tap to switch"
+                        // banner is intentionally gone. A healthy live tunnel
+                        // is never disturbed; a degraded one is switched
+                        // automatically. Disconnected behavior is unchanged
+                        // (no auto-connect).
                         refreshUiRows()
                     }
                 }
