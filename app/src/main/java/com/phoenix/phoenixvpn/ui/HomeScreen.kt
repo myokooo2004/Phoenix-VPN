@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -261,16 +262,43 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 Text(text = "›", color = TextMuted, fontSize = 18.sp)
             }
 
-            // Freshness
-            Text(
-                text = "Endpoints updated ${ui.updatedAgo}",
-                color = if (ui.stale) Amber else TextDim,
-                fontSize = 12.sp,
+            // Freshness + refresh pill
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp),
-                textAlign = TextAlign.Center
-            )
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Endpoints updated ${ui.updatedAgo}",
+                    color = if (ui.stale) Amber else TextDim,
+                    fontSize = 12.sp
+                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Teal.copy(alpha = 0.12f))
+                        .border(1.dp, Teal.copy(alpha = 0.4f), RoundedCornerShape(50))
+                        .clickable { viewModel.refreshEndpointsNow() }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Refresh endpoints",
+                        tint = Teal,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = "Refresh",
+                        color = Teal,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
             if (ui.newBestAvailable && ui.statusLine != null && heroState == HeroState.CONNECTED) {
                 Text(
                     text = ui.statusLine!!,
