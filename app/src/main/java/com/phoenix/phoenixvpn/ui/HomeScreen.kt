@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -228,6 +229,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .navigationBarsPadding()
                 .padding(top = 18.dp, bottom = 18.dp)
         ) {
             Column(
@@ -275,7 +277,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 Box(
                     modifier = Modifier
                         .size(206.dp)
-                        .border(1.5.dp, Teal.copy(alpha = 0.28f), CircleShape),
+                        .border(2.dp, Teal.copy(alpha = 0.5f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     HeroButton(heroState) { viewModel.onPowerTap() }
