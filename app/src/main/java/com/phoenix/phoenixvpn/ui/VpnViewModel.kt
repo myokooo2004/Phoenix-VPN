@@ -14,6 +14,7 @@ import com.phoenix.phoenixvpn.network.EndpointInfo
 import com.phoenix.phoenixvpn.network.EndpointService
 import com.phoenix.phoenixvpn.vpn.EndpointStore
 import com.phoenix.phoenixvpn.vpn.TunnelConnectionState
+import com.phoenix.phoenixvpn.vpn.VpnForegroundService
 import com.phoenix.phoenixvpn.vpn.WireGuardManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -304,6 +305,9 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 manager.setUserOverride(false)
                 refreshUiRows()
                 if (!connectWithFailover(conf, excludeId = null)) {
+                    // All attempts failed: quiet cleanup (no manual-off
+                    // semantics — the user did NOT ask to stop).
+                    VpnForegroundService.stopQuiet(app)
                     message("No working endpoint found")
                 }
             } finally {
@@ -401,6 +405,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             } catch (_: Exception) {
             }
             if (!connectWithFailover(conf, excludeId = cur)) {
+                // Quiet cleanup: the user did NOT manually stop.
+                VpnForegroundService.stopQuiet(app)
                 message("No working endpoint found")
             }
         }

@@ -20,6 +20,13 @@ class VpnForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.phoenix.phoenixvpn.vpn.START"
         const val ACTION_STOP = "com.phoenix.phoenixvpn.vpn.STOP"
+        /**
+         * Internal cleanup stop. Unlike [ACTION_STOP] this carries NO
+         * manual-off semantics: it never touches WireGuardManager and never
+         * sets the user override. Used for failure cleanup (e.g. all
+         * failover attempts exhausted) where the user did NOT ask to stop.
+         */
+        const val ACTION_STOP_QUIET = "com.phoenix.phoenixvpn.vpn.STOP_QUIET"
 
         fun start(context: Context) {
             val intent = Intent(context, VpnForegroundService::class.java).apply {
@@ -35,6 +42,13 @@ class VpnForegroundService : Service() {
         fun stop(context: Context) {
             val intent = Intent(context, VpnForegroundService::class.java).apply {
                 action = ACTION_STOP
+            }
+            context.startService(intent)
+        }
+
+        fun stopQuiet(context: Context) {
+            val intent = Intent(context, VpnForegroundService::class.java).apply {
+                action = ACTION_STOP_QUIET
             }
             context.startService(intent)
         }
@@ -146,6 +160,13 @@ class VpnForegroundService : Service() {
                     WireGuardManager.getInstance(this).handleNotificationStop()
                 } catch (_: Exception) {
                 }
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            ACTION_STOP_QUIET -> {
+                // Internal failure cleanup only: stop the service WITHOUT
+                // manual-off semantics. Never touches WireGuardManager, never
+                // sets the user override.
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }

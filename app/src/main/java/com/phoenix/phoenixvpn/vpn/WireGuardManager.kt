@@ -19,6 +19,8 @@ import com.wireguard.config.Config
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,7 +31,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayInputStream
 
 enum class TunnelConnectionState {
@@ -77,6 +82,26 @@ class WireGuardManager(private val context: Context) {
 
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * Serializes every backend.setState() call. GoBackend keeps its tunnel
+     * state (currentTunnel / currentTunnelHandle / currentConfig) in plain
+     * unsynchronized fields, so concurrent setState() calls from the
+     * failover loop, the network callback, the watchdog and the auto-run
+     * rules can interleave and wedge the backend (stuck "connecting",
+     * occasional native crash).
+     */
+    private val backendMutex = Mutex()
+    /**
+     * elapsedRealtime() of the last completed setState(DOWN). Before the
+     * next setState(UP) we wait out [DOWN_UP_SETTLE_MS]: GoBackend's DOWN
+     * tears the old tunnel down via VpnService.stopSelf(), whose onDestroy()
+     * only runs later on the main thread — and that delayed onDestroy()
+     * nulls the backend's current tunnel fields. Bringing a new tunnel UP
+     * before it lands lets the stale onDestroy() kill the fresh tunnel
+     * (TUN_CREATION_ERROR / dead handshake).
+     */
+    private var lastDownAt = 0L
 
     // Auto-tunnel state — the master switch is purely user-controlled and is
     // NEVER changed programmatically.
@@ -190,7 +215,7 @@ class WireGuardManager(private val context: Context) {
             }
             currentTunnel = tunnel
 
-            val resultState = backend.setState(tunnel, Tunnel.State.UP, parsedConfig)
+            val resultState = setBackendState(tunnel, Tunnel.State.UP, parsedConfig)
             handleBackendState(name, resultState)
             // Service is already in the foreground (or was just re-delivered
             // via startForegroundService on the running service): mirror the
@@ -199,7 +224,10 @@ class WireGuardManager(private val context: Context) {
             startStatsPolling(tunnel)
             acquireLocks()
         } catch (e: Exception) {
-            VpnForegroundService.stop(context)
+            // Failure cleanup is quiet: it must NOT set the user override
+            // (that is reserved for an explicit manual-off). Auto-run stays
+            // armed so a later retry can still fire.
+            VpnForegroundService.stopQuiet(context)
             _vpnState.update {
                 it.copy(
                     connectionState = TunnelConnectionState.ERROR,
@@ -227,18 +255,22 @@ class WireGuardManager(private val context: Context) {
             _vpnState.update { it.copy(connectionState = TunnelConnectionState.DISCONNECTING) }
             stopStatsPolling()
             releaseLocks()
-            val resultState = backend.setState(tunnel, Tunnel.State.DOWN, null)
+            val resultState = setBackendState(tunnel, Tunnel.State.DOWN, null)
             handleBackendState(tunnel.name, resultState)
             currentTunnel = null
             currentConfig = null
             if (keepService) {
                 VpnForegroundService.updateTunnelState(context, connected = false)
             } else {
-                VpnForegroundService.stop(context)
+                // Quiet stop: manual-off callers (notification "ရပ်ရန်",
+                // power-button off) already set the user override
+                // explicitly before calling. Internal callers (failover,
+                // endpoint switch) must NOT poison it.
+                VpnForegroundService.stopQuiet(context)
             }
         } catch (e: Exception) {
             if (!keepService) {
-                VpnForegroundService.stop(context)
+                VpnForegroundService.stopQuiet(context)
             }
             _vpnState.update {
                 it.copy(
@@ -263,6 +295,7 @@ class WireGuardManager(private val context: Context) {
         configContent: String,
         timeoutMs: Long = 5000L
     ): Boolean = withContext(Dispatchers.IO) {
+        var tunnel: PhoenixTunnel? = null
         try {
             _vpnState.update {
                 it.copy(
@@ -272,6 +305,10 @@ class WireGuardManager(private val context: Context) {
                 )
             }
 
+            // The foreground service stays up across failover attempts
+            // (started once here, stopped quietly only when every attempt
+            // fails). Per-attempt stop/start churn used to poison the user
+            // override via ACTION_STOP's manual-off semantics.
             VpnForegroundService.start(context)
 
             val parsedConfig = Config.parse(
@@ -282,10 +319,26 @@ class WireGuardManager(private val context: Context) {
             // Empty state callback: _vpnState is driven manually below, so a
             // racy backend UP event can't mark us CONNECTED before the first
             // handshake byte arrives.
-            val tunnel = PhoenixTunnel(name) { }
+            tunnel = PhoenixTunnel(name) { }
             currentTunnel = tunnel
 
-            backend.setState(tunnel, Tunnel.State.UP, parsedConfig)
+            try {
+                setBackendState(tunnel, Tunnel.State.UP, parsedConfig)
+            } catch (te: TimeoutCancellationException) {
+                // Wedged backend: fail THIS attempt cleanly so the caller
+                // tries the next endpoint instead of hanging "connecting".
+                Log.e(TAG, "setState UP timed out for $name")
+                tunnel?.let { t ->
+                    try {
+                        setBackendState(t, Tunnel.State.DOWN, null)
+                    } catch (_: Exception) {
+                    }
+                }
+                handleBackendState(name, Tunnel.State.DOWN)
+                currentTunnel = null
+                currentConfig = null
+                return@withContext false
+            }
 
             var handshakeOk = false
             val deadline = SystemClock.elapsedRealtime() + timeoutMs
@@ -305,13 +358,12 @@ class WireGuardManager(private val context: Context) {
 
             if (!handshakeOk) {
                 try {
-                    backend.setState(tunnel, Tunnel.State.DOWN, null)
+                    setBackendState(tunnel, Tunnel.State.DOWN, null)
                 } catch (_: Exception) {
                 }
                 handleBackendState(name, Tunnel.State.DOWN)
                 currentTunnel = null
                 currentConfig = null
-                VpnForegroundService.stop(context)
                 return@withContext false
             }
 
@@ -321,15 +373,49 @@ class WireGuardManager(private val context: Context) {
             acquireLocks()
             true
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is TimeoutCancellationException) {
+                // A DOWN-path timeout (UP timeouts are handled above):
+                // attempt failure, not a user cancellation.
+                Log.e(TAG, "setState DOWN timed out for $name")
+                currentTunnel = null
+                currentConfig = null
+                _vpnState.update {
+                    it.copy(
+                        connectionState = TunnelConnectionState.DISCONNECTED,
+                        activeTunnelName = null,
+                        errorMessage = null
+                    )
+                }
+                return@withContext false
+            }
+            if (e is kotlinx.coroutines.CancellationException) {
+                // Cancelled mid-attempt (user tapped again): don't leak a
+                // half-up tunnel behind a stuck CONNECTING. NonCancellable
+                // so the DOWN actually runs despite the cancellation.
+                withContext(NonCancellable) {
+                    try {
+                        tunnel?.let { setBackendState(it, Tunnel.State.DOWN, null) }
+                    } catch (_: Exception) {
+                    }
+                }
+                currentTunnel = null
+                currentConfig = null
+                _vpnState.update {
+                    it.copy(
+                        connectionState = TunnelConnectionState.DISCONNECTED,
+                        activeTunnelName = null,
+                        errorMessage = null
+                    )
+                }
+                throw e
+            }
             Log.d(TAG, "connect $name failed: ${e.message}")
             try {
-                currentTunnel?.let { backend.setState(it, Tunnel.State.DOWN, null) }
+                currentTunnel?.let { setBackendState(it, Tunnel.State.DOWN, null) }
             } catch (_: Exception) {
             }
             currentTunnel = null
             currentConfig = null
-            VpnForegroundService.stop(context)
             _vpnState.update {
                 it.copy(
                     connectionState = TunnelConnectionState.DISCONNECTED,
@@ -351,6 +437,30 @@ class WireGuardManager(private val context: Context) {
             Regex("(?im)^\\s*Endpoint\\s*=.*"),
             "Endpoint = $endpoint"
         )
+    }
+
+    /**
+     * The ONLY way to call backend.setState(). Serializes callers, enforces
+     * the DOWN→UP settle, and hard-bounds setState(UP) with a timeout so a
+     * wedged backend can never leave the UI stuck at "connecting" forever —
+     * it becomes a clean attempt failure instead.
+     */
+    private suspend fun setBackendState(
+        tunnel: PhoenixTunnel,
+        state: Tunnel.State,
+        config: Config?
+    ): Tunnel.State = backendMutex.withLock {
+        if (state == Tunnel.State.UP) {
+            val waitMs = DOWN_UP_SETTLE_MS - (SystemClock.elapsedRealtime() - lastDownAt)
+            if (waitMs > 0) delay(waitMs)
+        }
+        try {
+            withTimeout(SET_STATE_TIMEOUT_MS) {
+                backend.setState(tunnel, state, config)
+            }
+        } finally {
+            if (state == Tunnel.State.DOWN) lastDownAt = SystemClock.elapsedRealtime()
+        }
     }
 
     // ============================================================
@@ -456,7 +566,11 @@ class WireGuardManager(private val context: Context) {
         try {
             val config = currentConfig ?: return
             val tunnel = currentTunnel ?: return
-            backend.setState(tunnel, Tunnel.State.UP, config)
+            // Serialized like every other setState. NOTE: with unchanged
+            // tunnel+config refs GoBackend treats this as a no-op — the
+            // rebind counter still advances so a truly dead endpoint is
+            // declared dead on schedule.
+            setBackendState(tunnel, Tunnel.State.UP, config)
             Log.d(TAG, "Watchdog: rx stalled ${WATCHDOG_STALL_MS}ms while tx grew — " +
                     "re-handshake attempt $watchdogRebinds/$WATCHDOG_MAX_REBINDS")
         } catch (e: Exception) {
@@ -613,12 +727,14 @@ class WireGuardManager(private val context: Context) {
         autoTunnelJob = scope.launch(Dispatchers.IO) {
             delay(delayMs)
 
-            // Rebind if connected (Xiaomi-specific stalls).
+            // Rebind if connected (Xiaomi-specific stalls). Serialized through
+            // setBackendState; note this is a no-op when the tunnel and
+            // config are unchanged (GoBackend short-circuits same refs).
             val tunnel = currentTunnel
             val config = currentConfig
             if (tunnel != null && config != null) {
                 try {
-                    backend.setState(tunnel, Tunnel.State.UP, config)
+                    setBackendState(tunnel, Tunnel.State.UP, config)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to rebind tunnel", e)
                 }
@@ -753,6 +869,18 @@ class WireGuardManager(private val context: Context) {
         private const val WATCHDOG_STALL_MS = 20_000L
         /** Max re-handshakes per stall episode (resets when rx moves again). */
         private const val WATCHDOG_MAX_REBINDS = 3
+        /**
+         * DOWN→UP settle: lets a torn-down VpnService's delayed onDestroy()
+         * finish before the next establish(), so it can't kill the fresh
+         * tunnel. Applies only right after a DOWN; a fresh UP waits nothing.
+         */
+        private const val DOWN_UP_SETTLE_MS = 500L
+        /**
+         * Hard backstop for backend.setState(): converts a wedged backend
+         * into a clean attempt failure instead of a forever-"connecting" UI.
+         * Normal UP completes in well under a second (local tun setup).
+         */
+        private const val SET_STATE_TIMEOUT_MS = 15_000L
 
         @Volatile
         private var INSTANCE: WireGuardManager? = null
