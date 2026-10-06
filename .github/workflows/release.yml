@@ -66,7 +66,8 @@ jobs:
             echo "ERROR: GOOGLE_SERVICES_JSON secret is not set" >&2
             exit 1
           fi
-          echo "${{ secrets.GOOGLE_SERVICES_JSON }}" > app/google-services.json
+          # Secret holds base64 (single-line, shell-safe) of google-services.json
+          echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 -d > app/google-services.json
           echo "google-services.json injected"
 
       - name: Make Gradlew Executable
