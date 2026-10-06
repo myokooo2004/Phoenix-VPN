@@ -537,7 +537,7 @@ class WireGuardManager(private val context: Context) {
     private var lastRxProgressAt: Long = 0L
     private var watchdogRebinds: Int = 0
 
-    private fun watchdogCheck(rx: Long, tx: Long) {
+    private suspend fun watchdogCheck(rx: Long, tx: Long) {
         val now = System.currentTimeMillis()
         if (rx != lastRxBytes) {
             lastRxBytes = rx
