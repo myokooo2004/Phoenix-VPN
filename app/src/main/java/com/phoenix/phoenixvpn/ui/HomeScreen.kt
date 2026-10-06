@@ -228,7 +228,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 18.dp, bottom = 28.dp)
+                .padding(top = 18.dp, bottom = 18.dp)
         ) {
             Column(
                 modifier = Modifier
@@ -270,9 +270,16 @@ fun HomeScreen(viewModel: VpnViewModel) {
 
             Spacer(Modifier.height(30.dp))
 
-            // Hero power button
+            // Hero power button with faint halo ring (mockup).
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                HeroButton(heroState) { viewModel.onPowerTap() }
+                Box(
+                    modifier = Modifier
+                        .size(206.dp)
+                        .border(1.5.dp, Teal.copy(alpha = 0.28f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    HeroButton(heroState) { viewModel.onPowerTap() }
+                }
             }
 
             // Hint
@@ -407,6 +414,9 @@ fun HomeScreen(viewModel: VpnViewModel) {
                 )
             }
 
+            // Push Auto VPN card + footer to the bottom as a unit (mockup).
+            Spacer(Modifier.weight(1f))
+
             // Auto VPN row
             Row(
                 modifier = Modifier
@@ -447,9 +457,6 @@ fun HomeScreen(viewModel: VpnViewModel) {
                     .padding(top = 5.dp),
                 textAlign = TextAlign.Center
             )
-
-            // Flexible space below footer; bottom 28dp padding preserved.
-            Spacer(Modifier.weight(1f))
             } // end padded content column
         }
 
@@ -506,9 +513,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                         ui.rows.forEach { row ->
                             EndpointSheetRow(
                                 row = row,
-                                onTap = { viewModel.selectEndpoint(row.id) },
-                                onEdit = { viewModel.openEditDialog(row.id) },
-                                onDelete = { viewModel.deleteEndpoint(row.id) }
+                                onTap = { viewModel.selectEndpoint(row.id) }
                             )
                         }
                     },
@@ -991,9 +996,7 @@ private fun FloatingEndpointSheet(
 @Composable
 private fun EndpointSheetRow(
     row: EndpointRow,
-    onTap: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onTap: () -> Unit
 ) {
     val cardShape = RoundedCornerShape(16.dp)
     Row(
@@ -1041,24 +1044,6 @@ private fun EndpointSheetRow(
             color = TextSecondary,
             fontSize = 12.sp
         )
-        Icon(
-            imageVector = Icons.Filled.Edit,
-            contentDescription = "Edit endpoint",
-            tint = Teal,
-            modifier = Modifier
-                .padding(start = 8.dp)
-                .size(16.dp)
-                .clickable { onEdit() }
-        )
-        Icon(
-            imageVector = Icons.Filled.Delete,
-            contentDescription = "Delete endpoint",
-            tint = TextMuted,
-            modifier = Modifier
-                .padding(start = 8.dp)
-                .size(16.dp)
-                .clickable { onDelete() }
-        )
     }
 }
 
@@ -1089,17 +1074,23 @@ private fun ManualSheetRow(
             Box(modifier = Modifier.width(26.dp)) {
                 if (isCurrent) Text(text = "✓", color = Green, fontSize = 16.sp)
             }
-            Text(
-                text = "✎",
-                color = Teal,
-                fontSize = 14.sp,
-                modifier = Modifier.clickable { onEdit() }.padding(4.dp)
+            Icon(
+                imageVector = Icons.Filled.Edit,
+                contentDescription = "Edit endpoint",
+                tint = Teal,
+                modifier = Modifier
+                    .padding(start = 4.dp)
+                    .size(16.dp)
+                    .clickable { onEdit() }
             )
-            Text(
-                text = "🗑",
-                color = TextMuted,
-                fontSize = 14.sp,
-                modifier = Modifier.clickable { onDelete() }.padding(4.dp)
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = "Delete endpoint",
+                tint = TextMuted,
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .size(16.dp)
+                    .clickable { onDelete() }
             )
         } else {
             Text(text = "＋", color = Teal, fontSize = 17.sp)
