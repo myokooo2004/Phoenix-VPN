@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.phoenix.phoenixvpn.analytics.Analytics
 import com.phoenix.phoenixvpn.network.ConfigService
 import com.phoenix.phoenixvpn.network.EndpointInfo
 import com.phoenix.phoenixvpn.network.EndpointService
@@ -155,6 +156,12 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     // (newBestAvailable survives — it clears when the user
                     // switches to the new #1.)
                     _ui.update { it.copy(statusLine = null) }
+                    Analytics.logConnect()
+                }
+                if (lastConnState == TunnelConnectionState.CONNECTED &&
+                    cur == TunnelConnectionState.DISCONNECTED
+                ) {
+                    Analytics.logDisconnect()
                 }
                 lastConnState = cur
                 if (cur == TunnelConnectionState.CONNECTED) {

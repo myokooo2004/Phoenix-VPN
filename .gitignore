@@ -11,3 +11,6 @@ captures
 .externalNativeBuild
 .cxx
 local.properties
+
+# Firebase: injected via GOOGLE_SERVICES_JSON secret in CI; never commit
+app/google-services.json

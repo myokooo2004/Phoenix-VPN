@@ -60,6 +60,15 @@ jobs:
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > phoenix-release.jks
           echo "Keystore decoded at $(pwd)/phoenix-release.jks"
 
+      - name: Inject google-services.json (Firebase)
+        run: |
+          if [ -z "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo "ERROR: GOOGLE_SERVICES_JSON secret is not set" >&2
+            exit 1
+          fi
+          echo "${{ secrets.GOOGLE_SERVICES_JSON }}" > app/google-services.json
+          echo "google-services.json injected"
+
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 

@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.phoenix.phoenixvpn.analytics.Analytics
 import com.phoenix.phoenixvpn.ui.HomeScreen
 import com.phoenix.phoenixvpn.ui.VpnViewModel
 import com.phoenix.phoenixvpn.ui.theme.PhoenixVpnTheme
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Analytics.init(this)
         checkNotificationPermission()
 
         enableEdgeToEdge(
