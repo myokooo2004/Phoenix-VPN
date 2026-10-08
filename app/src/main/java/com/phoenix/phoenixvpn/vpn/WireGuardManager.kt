@@ -35,7 +35,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class TunnelConnectionState {
     DISCONNECTED,
@@ -296,6 +298,22 @@ class WireGuardManager(private val context: Context) {
         timeoutMs: Long = 5000L
     ): Boolean = withContext(Dispatchers.IO) {
         var tunnel: PhoenixTunnel? = null
+        // Stuck watchdog (v1.26): a single attempt can never legitimately
+        // exceed the 15s setState timeout + 5s handshake poll + slack. Still
+        // inside after 30s → wedged at the native level → non-fatal to
+        // Crashlytics so it auto-reports with zero user action.
+        val attemptJob = coroutineContext.job
+        val attemptDone = AtomicBoolean(false)
+        val watchdog = scope.launch {
+            delay(STUCK_WATCHDOG_MS)
+            if (!attemptJob.isCancelled && attemptDone.compareAndSet(false, true)) {
+                withContext(Dispatchers.IO) { reportStuckAttempt(name) }
+            }
+        }
+        attemptJob.invokeOnCompletion {
+            attemptDone.set(true)
+            watchdog.cancel()
+        }
         try {
             _vpnState.update {
                 it.copy(
@@ -424,6 +442,39 @@ class WireGuardManager(private val context: Context) {
                 )
             }
             false
+        }
+    }
+
+    /**
+     * Stuck watchdog reporter (v1.26): a connect attempt still inside after
+     * [STUCK_WATCHDOG_MS] is wedged at the native level (no Kotlin timeout
+     * can interrupt it). Records a non-fatal to Crashlytics with the recent
+     * log lines attached, so the failure auto-reports with zero user action.
+     * Never throws — diagnostics must not break the VPN path.
+     */
+    private fun reportStuckAttempt(name: String) {
+        try {
+            val c = FirebaseCrashlytics.getInstance()
+            c.setCustomKey("stuck_endpoint", name)
+            c.setCustomKey("stuck_phase", "connect_attempt")
+            c.log("Stuck watchdog fired for $name — recent log:")
+            readRecentLogLines().forEach { c.log(it) }
+            c.recordException(RuntimeException("VPN connect stuck >30s: $name"))
+            Log.e(TAG, "Stuck watchdog: recorded non-fatal for $name")
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun readRecentLogLines(): List<String> {
+        return try {
+            val proc = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-v", "time"))
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            out.lines()
+                .filter { it.contains("PhoenixVpnManager") || it.contains("GoBackend") || it.contains("WireGuard") }
+                .takeLast(60)
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
@@ -881,6 +932,14 @@ class WireGuardManager(private val context: Context) {
          * Normal UP completes in well under a second (local tun setup).
          */
         private const val SET_STATE_TIMEOUT_MS = 15_000L
+
+        /**
+         * Stuck watchdog for a single connect attempt (v1.26). One attempt
+         * can never legitimately exceed the 15s setState timeout + 5s
+         * handshake poll + slack — beyond this the backend is wedged at
+         * the native level and the UI would sit at "connecting" forever.
+         */
+        private const val STUCK_WATCHDOG_MS = 30_000L
 
         @Volatile
         private var INSTANCE: WireGuardManager? = null

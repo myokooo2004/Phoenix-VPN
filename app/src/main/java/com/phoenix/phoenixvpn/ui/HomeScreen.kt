@@ -1,11 +1,11 @@
 package com.phoenix.phoenixvpn.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.PowerManager
 import android.os.SystemClock
-import android.provider.Settings
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -43,9 +43,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -78,6 +75,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -85,6 +84,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.phoenix.phoenixvpn.R
 import com.phoenix.phoenixvpn.ui.theme.Amber
 import com.phoenix.phoenixvpn.ui.theme.Bg
 import com.phoenix.phoenixvpn.ui.theme.Border
@@ -101,8 +101,10 @@ import com.phoenix.phoenixvpn.ui.theme.TextMuted
 import com.phoenix.phoenixvpn.ui.theme.TextPrimary
 import com.phoenix.phoenixvpn.ui.theme.TextSecondary
 import com.phoenix.phoenixvpn.vpn.TunnelConnectionState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 private enum class HeroState { IDLE, WORKING, CONNECTED, ERROR }
@@ -237,7 +239,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                     .statusBarsPadding()
                     .padding(horizontal = 20.dp)
             ) {
-                AppBar(viewModel)
+                AppBar()
             }
             // Battery-protection strip: full-bleed, only when not exempted.
             BatteryStrip(viewModel)
@@ -593,87 +595,157 @@ fun HomeScreen(viewModel: VpnViewModel) {
         }
     }
 
-    // About dialog
-    if (ui.aboutOpen) {
-        AlertDialog(
-            onDismissRequest = { viewModel.closeAbout() },
-            containerColor = Surface,
-            title = { Text("ဖီးနစ် VPN", color = TextPrimary) },
-            text = {
-                Text(
-                    "Lightweight WireGuard VPN.\nEndpoints are auto-fetched in publisher order.\n\nDeveloped by ဖီးနစ် (ထူးကြီး)",
-                    color = TextSecondary,
-                    fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.closeAbout() }) {
-                    Text("OK", color = Teal)
-                }
-            }
-        )
-    }
+    // NOTE: the ⋯ menu (refresh/about/app info) was removed in v1.26 —
+    // the about dialog is intentionally gone.
 }
 
 private data class Quad(val text: String, val color: Color, val dot: Color, val glow: Boolean)
 
 @Composable
-private fun AppBar(viewModel: VpnViewModel) {
-    val context = LocalContext.current
-    var menuOpen by remember { mutableStateOf(false) }
+private fun AppBar() {
+    var logOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "ဖီးနစ် VPN",
+            text = "ဖီးနစ်",
             color = TextPrimary,
             fontSize = 17.sp,
             fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily(Font(R.font.noto_serif_myanmar_bold)),
             letterSpacing = 0.3.sp,
             modifier = Modifier.weight(1f)
         )
-        Box {
+        Text(
+            text = "Log",
+            color = Teal,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clickable { logOpen = true }.padding(4.dp)
+        )
+    }
+    if (logOpen) {
+        LogDialog(onDismiss = { logOpen = false })
+    }
+}
+
+/**
+ * Centered log viewer (v1.26). Reads this app's own logcat lines — no extra
+ * permission needed, an app can always read its own UID's logs — filtered to
+ * our tags, newest 200 lines. Copy puts the text on the clipboard.
+ */
+@Composable
+private fun LogDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var logText by remember { mutableStateOf("Loading…") }
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        logText = withContext(Dispatchers.IO) { readAppLog() }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(CardSurface)
+                .border(1.dp, SheetBorder, RoundedCornerShape(20.dp))
+                .padding(20.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Log",
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                LogPill(text = if (copied) "Copied ✓" else "Copy") {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        ?: return@LogPill
+                    cm.setPrimaryClip(ClipData.newPlainText("Phoenix VPN log", logText))
+                    copied = true
+                    scope.launch {
+                        delay(1500)
+                        copied = false
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                LogPill(text = "Share") {
+                    try {
+                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, logText)
+                            putExtra(Intent.EXTRA_SUBJECT, "Phoenix VPN log")
+                        }
+                        context.startActivity(Intent.createChooser(sendIntent, "Share log"))
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
             Text(
-                text = "⋯",
-                color = TextMuted,
-                fontSize = 20.sp,
-                letterSpacing = 2.sp,
-                modifier = Modifier.clickable { menuOpen = true }.padding(4.dp)
+                text = logText,
+                color = TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState())
             )
-            DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-                containerColor = Surface
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
             ) {
-                DropdownMenuItem(
-                    text = { Text("Refresh endpoints", color = TextPrimary) },
-                    onClick = {
-                        menuOpen = false
-                        viewModel.refreshEndpointsNow()
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("About", color = TextPrimary) },
-                    onClick = {
-                        menuOpen = false
-                        viewModel.openAbout()
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("App info", color = TextPrimary) },
-                    onClick = {
-                        menuOpen = false
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                Uri.parse("package:${context.packageName}")
-                            )
-                        )
-                    }
-                )
+                TextButton(onClick = onDismiss) {
+                    Text("CLOSE", color = Teal, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
+    }
+}
+
+/**
+ * Small teal pill button used in the log dialog header (Copy / Share).
+ */
+@Composable
+private fun LogPill(text: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Teal.copy(alpha = 0.12f))
+            .border(1.dp, Teal.copy(alpha = 0.4f), RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            color = Teal,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+private fun readAppLog(): String {
+    return try {
+        val proc = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-v", "time"))
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        out.lines()
+            .filter { it.contains("PhoenixVpnManager") || it.contains("GoBackend") || it.contains("WireGuard") }
+            .takeLast(200)
+            .joinToString("\n")
+            .ifBlank { "(no log lines yet)" }
+    } catch (e: Exception) {
+        "Log unavailable: ${e.message}"
     }
 }
 
