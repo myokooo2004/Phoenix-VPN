@@ -336,10 +336,18 @@ class WireGuardManager(private val context: Context) {
             currentConfig = parsedConfig
 
             // Empty state callback: _vpnState is driven manually below, so a
-            // racy backend UP event can't mark us CONNECTED before the first
-            // handshake byte arrives.
+            // racy backend UP event can't mark us CONNECTED before the
+            // handshake is confirmed (timestamp) or the first data byte
+            // arrives.
             tunnel = PhoenixTunnel(name) { }
             currentTunnel = tunnel
+
+            // Wall-clock baseline for handshake-timestamp detection: a
+            // handshake timestamp at/after this proves the handshake
+            // completed during THIS attempt (a stale value from an
+            // earlier session can't pass). Captured before setState(UP)
+            // so a handshake racing the call still counts.
+            val attemptStartWallMs = System.currentTimeMillis()
 
             try {
                 setBackendState(tunnel, Tunnel.State.UP, parsedConfig)
@@ -363,12 +371,20 @@ class WireGuardManager(private val context: Context) {
             val deadline = SystemClock.elapsedRealtime() + timeoutMs
             while (SystemClock.elapsedRealtime() < deadline) {
                 if (!isActive) break
-                val rx = try {
-                    backend.getStatistics(tunnel)?.totalRx() ?: 0L
+                val stats = try {
+                    backend.getStatistics(tunnel)
                 } catch (_: Exception) {
-                    0L
+                    null
                 }
-                if (rx > 0) {
+                val rx = stats?.totalRx() ?: 0L
+                // Fast path: handshake completed during THIS attempt — works
+                // on idle lines with zero traffic (no need to wait for data).
+                // Slow path: first data bytes arrived. Either proves the
+                // endpoint is alive.
+                val hsDone = stats?.peers()?.any { k ->
+                    (stats.peer(k)?.latestHandshakeEpochMillis() ?: 0L) >= attemptStartWallMs
+                } == true
+                if (rx > 0 || hsDone) {
                     handshakeOk = true
                     break
                 }
