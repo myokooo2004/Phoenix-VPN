@@ -266,7 +266,17 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                // 2. .conf
+                // 2. VPN permission — ask before any fetching, so the user
+                // isn't left staring at a fetch phase on a fresh install.
+                if (manager.checkVpnPermission() != null) {
+                    val granted = awaitPermission()
+                    if (!granted) {
+                        message("VPN permission denied")
+                        return@launch
+                    }
+                }
+
+                // 3. .conf
                 var conf = store.baseConf
                 if (conf.isNullOrBlank()) {
                     setPhase(SetupPhase.FETCHING_CONFIG, "Fetching config…")
@@ -297,17 +307,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 refreshUpdatedAgo()
 
-                // 4. VPN permission — needed for connect.
-                // Requested just-in-time, after the fetches.
-                if (manager.checkVpnPermission() != null) {
-                    val granted = awaitPermission()
-                    if (!granted) {
-                        message("VPN permission denied")
-                        return@launch
-                    }
-                }
-
-                // 5. Connect with failover in publisher order: published
+                // 5. Connect with failover: fresh top-3 first, then cached,
                 // top-10 → bundled → manual. First handshake (~5s each)
                 // wins and stays connected.
                 setPhase(SetupPhase.IDLE, "Connecting…")
@@ -359,22 +359,31 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         fun add(e: EndpointInfo) {
             if (seen.add(e.id)) candidates.add(e)
         }
-        store.effectiveList().forEach { add(it) }
+        // Order: fresh top-3 first (sequential), then the cached
+        // last-working endpoint, then the rest. First success wins.
+        val effective = store.effectiveList()
+        effective.take(3).forEach { add(it) }
+        val cur = store.currentEndpoint
+        if (cur != null && cur != excludeId) {
+            // Cached endpoint after top-3 (add() dedupes if in top-3).
+            val found = (effective + EndpointStore.BUNDLED).firstOrNull { it.id == cur }
+            if (found != null) {
+                add(found)
+            } else {
+                // Not in any list — synthesize from the id.
+                val i = cur.lastIndexOf(':')
+                if (i > 0) {
+                    add(EndpointInfo(cur.substring(0, i), cur.substring(i + 1).toIntOrNull() ?: 500, null, null))
+                }
+            }
+        }
+        effective.drop(3).forEach { add(it) }
         EndpointStore.BUNDLED.forEach { add(it) }
         store.manualEndpoint?.let { raw ->
             val i = raw.lastIndexOf(':')
             if (i > 0) {
                 val port = raw.substring(i + 1).toIntOrNull() ?: 500
                 add(EndpointInfo(raw.substring(0, i), port, null, null))
-            }
-        }
-        // Honor an explicit selection / last working endpoint first.
-        val cur = store.currentEndpoint
-        if (cur != null && cur != excludeId) {
-            val idx = candidates.indexOfFirst { it.id == cur }
-            if (idx > 0) {
-                val e = candidates.removeAt(idx)
-                candidates.add(0, e)
             }
         }
         for (e in candidates) {
