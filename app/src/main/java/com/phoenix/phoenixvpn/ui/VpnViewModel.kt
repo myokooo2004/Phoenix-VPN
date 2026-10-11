@@ -676,6 +676,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun msFor(id: String?): Long? {
         if (id == null) return null
+        if (id == store.manualEndpoint) return store.manualMs
         return store.effectiveList().firstOrNull { it.id == id }?.ms
     }
 
