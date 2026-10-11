@@ -524,6 +524,7 @@ fun HomeScreen(viewModel: VpnViewModel) {
                     footer = {
                         ManualSheetRow(
                             manualId = ui.manualId,
+                            manualMs = ui.manualMs,
                             isCurrent = ui.manualId != null && ui.manualId == ui.currentId,
                             onSelect = { ui.manualId?.let { viewModel.selectEndpoint(it) } },
                             onAdd = { viewModel.openManualDialog() },
@@ -1124,6 +1125,7 @@ private fun EndpointSheetRow(
 @Composable
 private fun ManualSheetRow(
     manualId: String?,
+    manualMs: Long?,
     isCurrent: Boolean,
     onSelect: () -> Unit,
     onAdd: () -> Unit,
@@ -1144,7 +1146,15 @@ private fun ManualSheetRow(
                 fontSize = 13.sp,
                 modifier = Modifier.weight(1f)
             )
-            Box(modifier = Modifier.width(56.dp))
+            Box(modifier = Modifier.width(56.dp)) {
+                if (manualMs != null) {
+                    Text(
+                        text = "${manualMs}ms",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
             Box(modifier = Modifier.width(26.dp)) {
                 if (isCurrent) Text(text = "✓", color = Green, fontSize = 16.sp)
             }

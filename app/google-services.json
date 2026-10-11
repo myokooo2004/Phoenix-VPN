@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "238837306552",
+    "project_id": "phoenix-vpn-70e45",
+    "storage_bucket": "phoenix-vpn-70e45.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:238837306552:android:459a111763dcef82b9904d",
+        "android_client_info": {
+          "package_name": "com.phoenix.phoenixvpn"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAc_OsK3kqFLYiZKiKodOfoKng9OoOHcAo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

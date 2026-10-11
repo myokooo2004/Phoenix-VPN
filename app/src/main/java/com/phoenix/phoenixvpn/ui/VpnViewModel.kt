@@ -63,7 +63,8 @@ data class PhoenixUiState(
     val aboutOpen: Boolean = false,
     val message: String? = null,
     val connectedAt: Long = 0L,
-    val manualId: String? = null
+    val manualId: String? = null,
+    val manualMs: Long? = null
 )
 
 class VpnViewModel(application: Application) : AndroidViewModel(application) {
@@ -140,7 +141,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 autoRun = store.autoRun,
                 currentId = cur,
-                manualId = store.manualEndpoint
+                manualId = store.manualEndpoint,
+                manualMs = store.manualMs
             )
         }
         manager.setAutoRun(store.autoRun)
@@ -359,9 +361,20 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         fun add(e: EndpointInfo) {
             if (seen.add(e.id)) candidates.add(e)
         }
-        // Order: fresh top-3 first (sequential), then the cached
-        // last-working endpoint, then the rest. First success wins.
+        // Order: explicit user selection first, then fresh top-3
+        // (sequential), then the cached last-working endpoint, then the
+        // rest. First success wins.
         val effective = store.effectiveList()
+        val explicit = store.explicitEndpoint
+        if (explicit != null && explicit != excludeId) {
+            // User tapped/added this — their direct command wins.
+            val found = (effective + EndpointStore.BUNDLED).firstOrNull { it.id == explicit }
+            if (found != null) {
+                add(found)
+            } else {
+                add(EndpointInfo(explicit.substringBefore(":"), explicit.substringAfter(":").toInt(), null, null))
+            }
+        }
         effective.take(3).forEach { add(it) }
         val cur = store.currentEndpoint
         if (cur != null && cur != excludeId) {
@@ -440,6 +453,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     fun selectEndpoint(id: String) {
         closeSheet()
         store.currentEndpoint = id
+        store.explicitEndpoint = id
         _ui.update { it.copy(newBestAvailable = false) }
         val conf = store.baseConf
         if (conf == null) {
@@ -476,15 +490,23 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
         val target = _ui.value.editTargetId
         if (target == null) {
-            // ADD mode — single manual slot.
+            // ADD mode — single manual slot. Auto-select: the user just typed it.
             store.manualEndpoint = v
-            _ui.update { it.copy(manualId = v) }
-            message("Manual endpoint saved")
+            store.currentEndpoint = v
+            store.explicitEndpoint = v
+            store.manualMs = null
+            _ui.update { it.copy(manualId = v, manualMs = null) }
+            message("Manual endpoint saved — testing…")
+            testManualEndpoint(v)
         } else if (target == _ui.value.manualId) {
             // EDIT mode on the manual endpoint.
             store.manualEndpoint = v
-            _ui.update { it.copy(manualId = v) }
-            message("Manual endpoint updated")
+            store.currentEndpoint = v
+            store.explicitEndpoint = v
+            store.manualMs = null
+            _ui.update { it.copy(manualId = v, manualMs = null) }
+            message("Manual endpoint updated — testing…")
+            testManualEndpoint(v)
         } else {
             // EDIT mode on an auto-fetched row — persisted display override.
             store.editedEndpoints = store.editedEndpoints + (target to v)
@@ -495,10 +517,48 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         refreshUiRows()
     }
 
+    /** Test a manual endpoint with a 5s handshake; saves ms or null. */
+    private fun testManualEndpoint(id: String) {
+        // Don't disrupt an active connection.
+        val st = vpnState.value.connectionState
+        if (st == TunnelConnectionState.CONNECTED || st == TunnelConnectionState.CONNECTING) {
+            message("Manual endpoint saved (test skipped — VPN active)")
+            return
+        }
+        val conf = store.baseConf
+        if (conf == null) {
+            message("Manual endpoint saved (no config — test skipped)")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val cfg = manager.swapEndpoint(conf, id)
+                val start = SystemClock.elapsedRealtime()
+                val ok = manager.startTunnelAndAwaitHandshake("manual-test", cfg, 5000L)
+                val ms = SystemClock.elapsedRealtime() - start
+                try { manager.stopTunnel() } catch (_: Exception) {}
+                if (ok) {
+                    store.manualMs = ms
+                    message("Manual endpoint: ${ms}ms ✓")
+                } else {
+                    store.manualMs = null
+                    message("Manual endpoint unreachable")
+                }
+            } catch (e: Exception) {
+                try { manager.stopTunnel() } catch (_: Exception) {}
+                store.manualMs = null
+                message("Manual endpoint test failed")
+            }
+            refreshUiRows()
+        }
+    }
+
     fun deleteEndpoint(id: String) {
         if (id == _ui.value.manualId) {
             store.manualEndpoint = null
-            _ui.update { it.copy(manualId = null) }
+            store.manualMs = null
+            if (store.explicitEndpoint == id) store.explicitEndpoint = null
+            _ui.update { it.copy(manualId = null, manualMs = null) }
         } else {
             val d = store.deletedEndpoints
             d.add(id)
@@ -648,7 +708,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 rows = rows,
                 currentId = cur,
                 currentMs = msFor(cur),
-                manualId = manual
+                manualId = manual,
+                manualMs = store.manualMs
             )
         }
     }

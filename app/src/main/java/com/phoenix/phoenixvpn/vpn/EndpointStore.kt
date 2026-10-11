@@ -40,10 +40,21 @@ class EndpointStore(context: Context) {
         get() = prefs.getString(KEY_CURRENT, null)
         set(v) = prefs.edit().putString(KEY_CURRENT, v).apply()
 
+    /** Explicit user selection (tap in sheet or newly added manual) —
+     *  tried before the auto top-3 in failover. */
+    var explicitEndpoint: String?
+        get() = prefs.getString(KEY_EXPLICIT, null)
+        set(v) = prefs.edit().putString(KEY_EXPLICIT, v).apply()
+
     /** Single manual endpoint slot ("ip:port"), survives updates. */
     var manualEndpoint: String?
         get() = prefs.getString(KEY_MANUAL, null)
         set(v) = prefs.edit().putString(KEY_MANUAL, v).apply()
+
+    /** Measured handshake ms for the manual endpoint, null if untested/failed. */
+    var manualMs: Long?
+        get() = prefs.getLong(KEY_MANUAL_MS, -1L).let { if (it < 0) null else it }
+        set(v) = prefs.edit().putLong(KEY_MANUAL_MS, v ?: -1L).apply()
 
     /** User-deleted auto-fetched endpoint ids — hidden from the sheet list. */
     var deletedEndpoints: MutableSet<String>
@@ -129,7 +140,9 @@ class EndpointStore(context: Context) {
         private const val KEY_CACHED_AT = "cached_at"
         private const val KEY_PUBLISHED_AT = "published_at"
         private const val KEY_CURRENT = "current"
+        private const val KEY_EXPLICIT = "explicit_endpoint"
         private const val KEY_MANUAL = "manual"
+        private const val KEY_MANUAL_MS = "manual_ms"
         private const val KEY_DELETED = "deleted_endpoints"
         private const val KEY_EDITED = "edited_endpoints"
         private const val KEY_AUTORUN = "auto_run"
