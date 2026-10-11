@@ -78,6 +78,11 @@ class WireGuardManager(private val context: Context) {
     val endpointDeadEvent: SharedFlow<Unit> = _endpointDeadEvent.asSharedFlow()
 
     private var currentTunnel: PhoenixTunnel? = null
+
+    /** Pure handshake RTT (ms) from the last startTunnelAndAwaitHandshake —
+     *  measured from tunnel-UP to handshake-complete, excluding setup. */
+    var lastHandshakeMs: Long? = null
+        private set
     private var currentConfig: Config? = null
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -368,6 +373,10 @@ class WireGuardManager(private val context: Context) {
             }
 
             var handshakeOk = false
+            // Pure handshake baseline: tunnel is UP, handshake init sent.
+            // Time from here to hsDone is the network RTT, excluding setup.
+            val tunnelUpElapsed = SystemClock.elapsedRealtime()
+            lastHandshakeMs = null
             val deadline = SystemClock.elapsedRealtime() + timeoutMs
             while (SystemClock.elapsedRealtime() < deadline) {
                 if (!isActive) break
@@ -384,7 +393,13 @@ class WireGuardManager(private val context: Context) {
                 val hsDone = stats?.peers()?.any { k ->
                     (stats.peer(k)?.latestHandshakeEpochMillis() ?: 0L) >= attemptStartWallMs
                 } == true
-                if (rx > 0 || hsDone) {
+                if (hsDone) {
+                    // Pure handshake RTT, excluding tunnel setup.
+                    lastHandshakeMs = SystemClock.elapsedRealtime() - tunnelUpElapsed
+                    handshakeOk = true
+                    break
+                }
+                if (rx > 0) {
                     handshakeOk = true
                     break
                 }

@@ -533,13 +533,18 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val cfg = manager.swapEndpoint(conf, id)
-                val start = SystemClock.elapsedRealtime()
                 val ok = manager.startTunnelAndAwaitHandshake("manual-test", cfg, 5000L)
-                val ms = SystemClock.elapsedRealtime() - start
+                // Pure handshake RTT (excludes tunnel setup), or null if
+                // the slow rx-path was used.
+                val ms = manager.lastHandshakeMs
                 try { manager.stopTunnel() } catch (_: Exception) {}
-                if (ok) {
+                if (ok && ms != null) {
                     store.manualMs = ms
                     message("Manual endpoint: ${ms}ms ✓")
+                } else if (ok) {
+                    // Reachable via data path, but no pure handshake ms captured.
+                    store.manualMs = null
+                    message("Manual endpoint reachable ✓")
                 } else {
                     store.manualMs = null
                     message("Manual endpoint unreachable")
