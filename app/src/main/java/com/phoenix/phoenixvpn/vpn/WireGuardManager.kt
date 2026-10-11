@@ -81,6 +81,7 @@ class WireGuardManager(private val context: Context) {
 
     /** Pure handshake RTT (ms) from the last startTunnelAndAwaitHandshake —
      *  measured from tunnel-UP to handshake-complete, excluding setup. */
+    @Volatile
     var lastHandshakeMs: Long? = null
         private set
     private var currentConfig: Config? = null
@@ -304,6 +305,9 @@ class WireGuardManager(private val context: Context) {
         timeoutMs: Long = 5000L
     ): Boolean = withContext(Dispatchers.IO) {
         var tunnel: PhoenixTunnel? = null
+        // Reset at the start: early returns (e.g. setState timeout) must not
+        // leave a stale value from a previous attempt.
+        lastHandshakeMs = null
         // Stuck watchdog (v1.26): a single attempt can never legitimately
         // exceed the 15s setState timeout + 5s handshake poll + slack. Still
         // inside after 30s → wedged at the native level → non-fatal to
@@ -373,10 +377,10 @@ class WireGuardManager(private val context: Context) {
             }
 
             var handshakeOk = false
-            // Pure handshake baseline: tunnel is UP, handshake init sent.
-            // Time from here to hsDone is the network RTT, excluding setup.
-            val tunnelUpElapsed = SystemClock.elapsedRealtime()
-            lastHandshakeMs = null
+            // Pure handshake baseline (wall-clock): tunnel is UP, handshake
+            // init sent. Using the peer's handshake timestamp avoids the
+            // 250ms poll quantization — this is the true network RTT.
+            val tunnelUpWallMs = System.currentTimeMillis()
             val deadline = SystemClock.elapsedRealtime() + timeoutMs
             while (SystemClock.elapsedRealtime() < deadline) {
                 if (!isActive) break
@@ -390,12 +394,15 @@ class WireGuardManager(private val context: Context) {
                 // on idle lines with zero traffic (no need to wait for data).
                 // Slow path: first data bytes arrived. Either proves the
                 // endpoint is alive.
+                var hsWallMs: Long? = null
                 val hsDone = stats?.peers()?.any { k ->
-                    (stats.peer(k)?.latestHandshakeEpochMillis() ?: 0L) >= attemptStartWallMs
+                    val t = stats.peer(k)?.latestHandshakeEpochMillis() ?: 0L
+                    if (t >= attemptStartWallMs) hsWallMs = t
+                    t >= attemptStartWallMs
                 } == true
                 if (hsDone) {
                     // Pure handshake RTT, excluding tunnel setup.
-                    lastHandshakeMs = SystemClock.elapsedRealtime() - tunnelUpElapsed
+                    hsWallMs?.let { lastHandshakeMs = it - tunnelUpWallMs }
                     handshakeOk = true
                     break
                 }
