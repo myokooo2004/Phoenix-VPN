@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 
 /** Micro-progress phases of the tap-to-connect flow (honest UI). */
 enum class SetupPhase { IDLE, FETCHING_CONFIG, FETCHING_ENDPOINTS }
@@ -279,12 +281,19 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 // 3. Endpoints (only when the cache is stale).
                 if (store.isCacheStale(now())) {
                     setPhase(SetupPhase.FETCHING_ENDPOINTS, "Fetching endpoints…")
-                    val res = EndpointService.fetch()
+                    // Bounded: a hanging fetch must not block connect when
+                    // cached endpoints exist. Timeout → fall through to
+                    // cache/bundled like any other fetch failure.
+                    val res = try {
+                        withTimeout(15_000) { EndpointService.fetch() }
+                    } catch (e: TimeoutCancellationException) {
+                        Result.failure(e)
+                    }
                     if (res.isSuccess) {
                         val f = res.getOrThrow()
                         store.saveFetched(f, now())
                     }
-                    // Failure: keep cache / bundled silently — never fatal.
+                    // Failure/timeout: keep cache / bundled silently — never fatal.
                 }
                 refreshUpdatedAgo()
 
