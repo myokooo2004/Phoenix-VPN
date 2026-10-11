@@ -399,11 +399,36 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 add(EndpointInfo(raw.substring(0, i), port, null, null))
             }
         }
+        var first = true
         for (e in candidates) {
             currentCoroutineContext().job.ensureActive()
             if (e.id == excludeId) continue
             _ui.update { it.copy(statusLine = "Connecting… ${e.id}") }
             val cfg = manager.swapEndpoint(conf, e.id)
+            if (first) {
+                // Tugyi-style: fire-and-forget for the first candidate.
+                // No handshake wait — matches Auto VPN path. The 12s
+                // watchdog catches stalls; ERROR state triggers failover.
+                first = false
+                try {
+                    manager.setUserOverride(false)
+                    store.currentEndpoint = e.id
+                    pushDefaultTunnel(conf, e.id)
+                    refreshUiRows()
+                    _ui.update { it.copy(currentMs = e.ms) }
+                    manager.startTunnel(manager.tunnelNameFor(e.id), cfg)
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Exception) {
+                    continue
+                }
+                // Brief pause for fast-fail (bad config, permission).
+                delay(500)
+                if (vpnState.value.connectionState == TunnelConnectionState.ERROR) {
+                    continue
+                }
+                return true
+            }
             val ok = try {
                 manager.startTunnelAndAwaitHandshake(manager.tunnelNameFor(e.id), cfg, 5000L)
             } catch (ce: CancellationException) {
