@@ -32,8 +32,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
 
 /** Micro-progress phases of the tap-to-connect flow (honest UI). */
 enum class SetupPhase { IDLE, FETCHING_CONFIG, FETCHING_ENDPOINTS }
@@ -252,10 +250,14 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Tap-to-connect flow:
-     *   internet → fetch .conf (if missing) → fetch endpoints.json (if stale)
-     *   → VPN permission → connect with failover (publisher order, first
-     *   handshake within ~5s wins; no pre-verification, so the VPN icon
-     *   never flickers).
+     *   internet → VPN permission → fetch .conf (if missing) →
+     *   connect immediately on the card's top-3 (cached list, or bundled
+     *   on fresh install). Endpoint freshness is handled separately: the
+     *   6-hour background check and the manual Refresh pill (update →
+     *   replace, no update → leave as-is). Tap never waits on — or
+     *   triggers — an endpoints fetch.
+     *   Then connect with failover (explicit → top-3 → last-working →
+     *   rest → bundled → manual; first candidate fire-and-forget).
      * Any step may abort back to disconnected with a toast reason.
      */
     fun connectFlow() {
@@ -290,23 +292,11 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     store.baseConf = conf
                 }
 
-                // 3. Endpoints (only when the cache is stale).
-                if (store.isCacheStale(now())) {
-                    setPhase(SetupPhase.FETCHING_ENDPOINTS, "Fetching endpoints…")
-                    // Bounded: a hanging fetch must not block connect when
-                    // cached endpoints exist. Timeout → fall through to
-                    // cache/bundled like any other fetch failure.
-                    val res = try {
-                        withTimeout(15_000) { EndpointService.fetch() }
-                    } catch (e: TimeoutCancellationException) {
-                        Result.failure(e)
-                    }
-                    if (res.isSuccess) {
-                        val f = res.getOrThrow()
-                        store.saveFetched(f, now())
-                    }
-                    // Failure/timeout: keep cache / bundled silently — never fatal.
-                }
+                // 3. Endpoints: tap never fetches. Connect immediately on the
+                // card's top-3 (cached list, or bundled on fresh install).
+                // Freshness comes only from the 6-hour background check
+                // (update → replace, no update → leave as-is) and the manual
+                // Refresh pill — never from a tap-time fetch.
                 refreshUpdatedAgo()
 
                 // 5. Connect with failover: fresh top-3 first, then cached,
