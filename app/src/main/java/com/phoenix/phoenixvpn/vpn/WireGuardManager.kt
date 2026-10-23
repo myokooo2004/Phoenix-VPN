@@ -615,7 +615,8 @@ class WireGuardManager(private val context: Context) {
     // The tunnel reports CONNECTED while no traffic arrives (dead/blocked
     // endpoint, stale NAT). When rx stalls for WATCHDOG_STALL_MS while tx
     // keeps growing (the user is actually trying to use the line), force a
-    // re-handshake with the same config. Bounded to WATCHDOG_MAX_REBINDS
+    // real tunnel restart (fresh socket/flow) with the same config.
+    // Bounded to WATCHDOG_MAX_REBINDS
     // attempts per stall episode; rx movement resets the episode. A fully
     // idle tunnel is never disturbed. When the episode is exhausted the
     // endpoint is declared dead (endpointDeadEvent) so the UI can fail over
@@ -656,15 +657,19 @@ class WireGuardManager(private val context: Context) {
         try {
             val config = currentConfig ?: return
             val tunnel = currentTunnel ?: return
-            // Serialized like every other setState. NOTE: with unchanged
-            // tunnel+config refs GoBackend treats this as a no-op — the
-            // rebind counter still advances so a truly dead endpoint is
-            // declared dead on schedule.
+            // REAL restart (2026-10-23): a same-refs setState(UP) was a
+            // documented no-op in GoBackend — the socket (and its dead
+            // NAT flow) survived, so the "rebind" never drew a new flow.
+            // DOWN destroys the tunnel's UDP socket; UP recreates it
+            // with a fresh source port = a new flow, exactly like the
+            // user's manual off/on toggle. Serialized like every other
+            // setState.
+            setBackendState(tunnel, Tunnel.State.DOWN, null)
             setBackendState(tunnel, Tunnel.State.UP, config)
             Log.d(TAG, "Watchdog: rx stalled ${WATCHDOG_STALL_MS}ms while tx grew — " +
-                    "re-handshake attempt $watchdogRebinds/$WATCHDOG_MAX_REBINDS")
+                    "flow re-roll $watchdogRebinds/$WATCHDOG_MAX_REBINDS")
         } catch (e: Exception) {
-            Log.e(TAG, "Watchdog rebind failed", e)
+            Log.e(TAG, "Watchdog re-roll failed", e)
         }
     }
 

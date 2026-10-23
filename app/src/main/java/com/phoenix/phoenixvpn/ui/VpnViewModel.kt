@@ -419,13 +419,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return true
             }
-            val ok = try {
-                manager.startTunnelAndAwaitHandshake(manager.tunnelNameFor(e.id), cfg, 5000L)
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (_: Exception) {
-                false
-            }
+            val ok = awaitHandshakeWithReroll(manager.tunnelNameFor(e.id), cfg)
             if (ok) {
                 store.currentEndpoint = e.id
                 pushDefaultTunnel(conf, e.id)
@@ -433,6 +427,32 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.update { it.copy(currentMs = e.ms) }
                 return true
             }
+        }
+        return false
+    }
+
+    /**
+     * One endpoint, up to 3 rapid consecutive attempts (user spec
+     * 2026-10-23): on MPT a failed handshake is usually a dead NAT flow,
+     * and retransmits on the same flow never recover — only a full tunnel
+     * restart draws a new flow (the manual off/on toggle, automated).
+     * Each startTunnelAndAwaitHandshake call tears the tunnel fully DOWN
+     * on failure, so every attempt is a fresh socket/flow. The re-rolls
+     * get short 1.5s windows (a healthy line handshakes in ~250ms — no
+     * long waits); the last attempt keeps the full 5s before the caller
+     * moves on to the next endpoint.
+     */
+    private suspend fun awaitHandshakeWithReroll(name: String, cfg: String): Boolean {
+        val windows = longArrayOf(1500L, 1500L, 5000L)
+        for (w in windows) {
+            val ok = try {
+                manager.startTunnelAndAwaitHandshake(name, cfg, w)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                false
+            }
+            if (ok) return true
         }
         return false
     }
@@ -603,7 +623,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshEndpointsNow() {
         viewModelScope.launch {
             message("Refreshing endpoints…")
-            val res = EndpointService.fetch()
+            val res = EndpointService.fetch(app)
             if (res.isSuccess) {
                 val f = res.getOrThrow()
                 store.saveFetched(f, now())
@@ -652,7 +672,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     store.isCacheStale(now) && hasValidatedInternet()
                 ) {
                     lastBackgroundFetchAt = now
-                    val res = EndpointService.fetch()
+                    val res = EndpointService.fetch(app)
                     if (res.isSuccess) {
                         val f = res.getOrThrow()
                         store.saveFetched(f, now())

@@ -1,7 +1,12 @@
 package com.phoenix.phoenixvpn.network
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -31,6 +36,11 @@ data class FetchedEndpoints(
  *
  * The file may 404 until the first publish — callers treat failure as
  * "keep cache / bundled", never as fatal.
+ *
+ * The fetch is bound to the underlying physical network (cellular / Wi-Fi),
+ * never routed through the VPN tunnel: plain internet is enough to receive
+ * new endpoints — no working tunnel and no handshake are required, so a
+ * dead/blackholed tunnel can never strangle the refresh.
  */
 object EndpointService {
     const val URL = "https://raw.githubusercontent.com/myokooo2004/Warp-IP-Scanner/main/endpoints.json"
@@ -42,8 +52,28 @@ object EndpointService {
         .followRedirects(true)
         .build()
 
-    suspend fun fetch(): Result<FetchedEndpoints> = withContext(Dispatchers.IO) {
-        try {
+    suspend fun fetch(context: Context): Result<FetchedEndpoints> =
+        withContext(Dispatchers.IO) {
+            val net = underlyingNetwork(context)
+            if (net != null) {
+                val bound = try {
+                    httpClient.newBuilder()
+                        .socketFactory(net.socketFactory)
+                        .dns(Dns { hostname -> net.getAllByName(hostname).toList() })
+                        .build()
+                } catch (_: Exception) {
+                    null
+                }
+                if (bound != null) {
+                    val r = attempt(bound)
+                    if (r.isSuccess) return@withContext r
+                }
+            }
+            attempt(httpClient)
+        }
+
+    private fun attempt(client: OkHttpClient): Result<FetchedEndpoints> {
+        return try {
             val request = Request.Builder()
                 .url(URL)
                 .header("User-Agent", "PhoenixVPN/1.0 (Android)")
@@ -51,14 +81,12 @@ object EndpointService {
                 .get()
                 .build()
 
-            httpClient.newCall(request).execute().use { response ->
+            client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    return@withContext Result.failure(
-                        IOException("HTTP ${response.code}")
-                    )
+                    return Result.failure(IOException("HTTP ${response.code}"))
                 }
                 val body = response.body?.string()
-                    ?: return@withContext Result.failure(IOException("Empty response body"))
+                    ?: return Result.failure(IOException("Empty response body"))
                 try {
                     Result.success(parse(body))
                 } catch (e: Exception) {
@@ -67,6 +95,23 @@ object EndpointService {
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    /**
+     * The physical network underneath any VPN (cellular / Wi-Fi /
+     * ethernet), or null when none is available.
+     */
+    private fun underlyingNetwork(context: Context): Network? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? ConnectivityManager ?: return null
+        return cm.allNetworks.firstOrNull { n ->
+            val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
         }
     }
 
