@@ -53,7 +53,11 @@ data class VpnUiState(
     val activeTunnelName: String? = null,
     val rxBytes: Long = 0,
     val txBytes: Long = 0,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** True once a REAL handshake has landed for the current session (v1.40). */
+    val handshakeLive: Boolean = false,
+    /** Live handshake latency (ms from flow UP to handshake), not the stored list ms. */
+    val livePingMs: Long? = null
 )
 
 class WireGuardManager(private val context: Context) {
@@ -586,6 +590,8 @@ class WireGuardManager(private val context: Context) {
         lastTxBytes = -1L
         lastRxProgressAt = System.currentTimeMillis()
         watchdogRebinds = 0
+        tunnelUpWallMs = System.currentTimeMillis()
+        _vpnState.update { it.copy(handshakeLive = false, livePingMs = null) }
         statsJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
@@ -594,7 +600,17 @@ class WireGuardManager(private val context: Context) {
                         val rx = stats.totalRx()
                         val tx = stats.totalTx()
                         _vpnState.update {
-                            it.copy(rxBytes = rx, txBytes = tx)
+                            val landed = handshakeLanded(stats)
+                            it.copy(
+                                rxBytes = rx, txBytes = tx,
+                                handshakeLive = it.handshakeLive || landed,
+                                livePingMs = if (landed && it.livePingMs == null) {
+                                    (latestHandshakeEpoch(stats) - tunnelUpWallMs)
+                                        .coerceAtLeast(0L)
+                                } else {
+                                    it.livePingMs
+                                }
+                            )
                         }
                         watchdogCheck(rx, tx)
                     }
@@ -603,6 +619,23 @@ class WireGuardManager(private val context: Context) {
             }
         }
         startBirthWake(tunnel)
+    }
+
+    /** Newest peer handshake time (epoch ms) in [stats]; 0 when none landed. */
+    private fun latestHandshakeEpoch(stats: Statistics): Long =
+        stats.peers().maxOfOrNull { k ->
+            stats.peer(k)?.latestHandshakeEpochMillis() ?: 0L
+        } ?: 0L
+
+    /**
+     * True when a REAL handshake has landed for the current flow: a
+     * peer handshake timestamp at/after this flow's UP (1s grace for a
+     * handshake that raced the UP stamp). A stale timestamp from an
+     * earlier session can never pass — it predates the flow.
+     */
+    private fun handshakeLanded(stats: Statistics): Boolean {
+        val hs = latestHandshakeEpoch(stats)
+        return hs > 0L && hs >= tunnelUpWallMs - 1000L
     }
 
     private fun stopStatsPolling() {
@@ -614,24 +647,29 @@ class WireGuardManager(private val context: Context) {
 
     private var wakeJob: Job? = null
 
+    /** Wall-clock stamp of the current flow's UP (re-stamped by the wake). */
+    private var tunnelUpWallMs: Long = 0L
+
     /**
-     * Birth wake (v1.39, user spec 2026-10-24): a fresh tunnel whose
-     * handshake never lands is not a dead endpoint — it is a dead NAT
-     * flow, and retransmits on that flow never recover; only a full
-     * restart draws a new one (the user's manual off/on toggle,
-     * automated). The UI keeps its fire-and-forget "connected"; behind
-     * it this loop re-draws flows — full DOWN→UP restarts on a
-     * 2.5s / 2.5s / 5s / 5s… cadence — until the first handshake rx
-     * arrives. It stands down the moment the tunnel is warm (rx > 0),
-     * when the user takes over (userOverride), or when polling stops
-     * (tunnel down / replaced). There is no give-up here and no
-     * endpoint is ever declared dead: the endpoint is alive, the
-     * flow was not. Mid-session stalls remain the watchdog's job.
+     * Birth wake (v1.39, user spec 2026-10-24; cadence v1.40): a fresh
+     * tunnel whose handshake never lands is not a dead endpoint — it
+     * is a dead NAT flow, and retransmits on that flow never recover;
+     * only a full restart draws a new one (the user's manual off/on
+     * toggle, automated). The UI keeps its fire-and-forget "connected";
+     * behind it this loop re-draws flows — full DOWN→UP restarts,
+     * faster than the user's own 4 manual toggles: 1.2s ×4, then
+     * 2.5s, then a steady 5s — until a REAL handshake lands
+     * ([handshakeLanded]) or data flows. It stands down the moment
+     * the tunnel is warm, when the user takes over (userOverride), or
+     * when polling stops (tunnel down / replaced). There is no
+     * give-up here and no endpoint is ever declared dead: the
+     * endpoint is alive, the flow was not. Mid-session stalls remain
+     * the watchdog's job.
      */
     private fun startBirthWake(tunnel: PhoenixTunnel) {
         wakeJob?.cancel()
         wakeJob = scope.launch(Dispatchers.IO) {
-            val windows = longArrayOf(2500L, 2500L, 5000L)
+            val windows = longArrayOf(1200L, 1200L, 1200L, 1200L, 2500L)
             var stage = 0
             while (isActive) {
                 delay(if (stage < windows.size) windows[stage] else 5000L)
@@ -642,9 +680,14 @@ class WireGuardManager(private val context: Context) {
                 } catch (_: Exception) {
                     null
                 } ?: continue
-                if (stats.totalRx() > 0L) return@launch // warm — job done
+                if (stats.totalRx() > 0L || handshakeLanded(stats)) {
+                    return@launch // warm — a real handshake landed; job done
+                }
                 if (_vpnState.value.connectionState != TunnelConnectionState.CONNECTED) continue
                 val config = currentConfig ?: return@launch
+                // Baseline BEFORE the restart (the await path's pattern):
+                // a handshake racing the UP counts as this flow's.
+                tunnelUpWallMs = System.currentTimeMillis()
                 try {
                     setBackendState(tunnel, Tunnel.State.DOWN, null)
                     setBackendState(tunnel, Tunnel.State.UP, config)

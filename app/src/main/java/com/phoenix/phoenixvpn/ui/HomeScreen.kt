@@ -302,8 +302,19 @@ fun HomeScreen(viewModel: VpnViewModel) {
             ) {
                 val connected = heroState == HeroState.CONNECTED
                 Stat(
-                    value = if (connected && ui.currentMs != null) "${ui.currentMs}" else "–",
-                    unit = if (connected && ui.currentMs != null) " ms" else null,
+                    // Live ping (v1.40): the REAL handshake latency of this
+                    // session — "–" until a real handshake has landed.
+                    // (ui.currentMs is only the endpoint's stored list ms.)
+                    value = if (connected && vpn.handshakeLive && vpn.livePingMs != null) {
+                        "${vpn.livePingMs}"
+                    } else {
+                        "–"
+                    },
+                    unit = if (connected && vpn.handshakeLive && vpn.livePingMs != null) {
+                        " ms"
+                    } else {
+                        null
+                    },
                     label = "Ping",
                     dim = !connected
                 )
