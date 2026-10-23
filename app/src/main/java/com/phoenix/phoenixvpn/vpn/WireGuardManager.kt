@@ -657,10 +657,11 @@ class WireGuardManager(private val context: Context) {
      * only a full restart draws a new one (the user's manual off/on
      * toggle, automated). The UI keeps its fire-and-forget "connected";
      * behind it this loop re-draws flows — full DOWN→UP restarts on
-     * a ~2s cycle (1s handshake window + ~1s restart/settle
-     * overhead): the user's manual WG toggle takes 3s, so the app
-     * must beat the human (user, 2026-10-24) — until a REAL
-     * handshake lands
+     * a ~1.4s cycle (0.5s handshake window + 0.5s DOWN→UP settle —
+     * a race guard, see lastDownAt — + ~0.4s restart): the user's
+     * hand flicks 4 WG toggles in 3s, so the app must get as close
+     * to the hand as the guard allows (user, 2026-10-24) — until a
+     * REAL handshake lands
      * ([handshakeLanded]) or data flows. It stands down the moment
      * the tunnel is warm, when the user takes over (userOverride), or
      * when polling stops (tunnel down / replaced). There is no
@@ -673,7 +674,7 @@ class WireGuardManager(private val context: Context) {
         wakeJob = scope.launch(Dispatchers.IO) {
             var stage = 0
             while (isActive) {
-                delay(1000L)
+                delay(500L)
                 if (userOverride) return@launch
                 if (currentTunnel !== tunnel) return@launch
                 val stats = try {
