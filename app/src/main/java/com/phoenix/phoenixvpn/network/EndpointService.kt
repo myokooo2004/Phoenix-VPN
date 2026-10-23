@@ -11,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.IOException
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 data class EndpointInfo(
@@ -59,7 +60,10 @@ object EndpointService {
                 val bound = try {
                     httpClient.newBuilder()
                         .socketFactory(net.socketFactory)
-                        .dns(Dns { hostname -> net.getAllByName(hostname).toList() })
+                        .dns(object : Dns {
+                            override fun lookup(hostname: String): List<InetAddress> =
+                                net.getAllByName(hostname).toList()
+                        })
                         .build()
                 } catch (_: Exception) {
                     null
