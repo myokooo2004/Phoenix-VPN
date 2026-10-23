@@ -542,10 +542,11 @@ class WireGuardManager(private val context: Context) {
     private suspend fun setBackendState(
         tunnel: PhoenixTunnel,
         state: Tunnel.State,
-        config: Config?
+        config: Config?,
+        settleMs: Long = DOWN_UP_SETTLE_MS
     ): Tunnel.State = backendMutex.withLock {
         if (state == Tunnel.State.UP) {
-            val waitMs = DOWN_UP_SETTLE_MS - (SystemClock.elapsedRealtime() - lastDownAt)
+            val waitMs = settleMs - (SystemClock.elapsedRealtime() - lastDownAt)
             if (waitMs > 0) delay(waitMs)
         }
         try {
@@ -656,12 +657,14 @@ class WireGuardManager(private val context: Context) {
      * is a dead NAT flow, and retransmits on that flow never recover;
      * only a full restart draws a new one (the user's manual off/on
      * toggle, automated). The UI keeps its fire-and-forget "connected";
-     * behind it this loop re-draws flows — full DOWN→UP restarts on
-     * a ~1.4s cycle (0.5s handshake window + 0.5s DOWN→UP settle —
-     * a race guard, see lastDownAt — + ~0.4s restart): the user's
-     * hand flicks 4 WG toggles in 3s, so the app must get as close
-     * to the hand as the guard allows (user, 2026-10-24) — until a
-     * REAL handshake lands
+     * behind it this loop re-draws flows — full DOWN→UP restarts,
+     * FASTER than the user's hand (his 4 WG toggles take 3s; this
+     * cycle is ~0.65s/draw: 0.25s handshake window + 0.15s wake
+     * settle + ~0.25s restart — 4 draws ≈ 2.6s), with NO cap: if 4
+     * draws don't wake it, it keeps drawing until a REAL handshake
+     * lands (user, 2026-10-24). The short wake settle can lose the
+     * delayed-onDestroy race (see lastDownAt); the loop recovers
+     * from that itself by bringing the tunnel straight back UP.
      * ([handshakeLanded]) or data flows. It stands down the moment
      * the tunnel is warm, when the user takes over (userOverride), or
      * when polling stops (tunnel down / replaced). There is no
@@ -674,25 +677,44 @@ class WireGuardManager(private val context: Context) {
         wakeJob = scope.launch(Dispatchers.IO) {
             var stage = 0
             while (isActive) {
-                delay(500L)
+                delay(250L)
                 if (userOverride) return@launch
                 if (currentTunnel !== tunnel) return@launch
                 val stats = try {
                     backend.getStatistics(tunnel)
                 } catch (_: Exception) {
                     null
-                } ?: continue
-                if (stats.totalRx() > 0L || handshakeLanded(stats)) {
+                }
+                if (stats != null &&
+                    (stats.totalRx() > 0L || handshakeLanded(stats))
+                ) {
                     return@launch // warm — a real handshake landed; job done
                 }
-                if (_vpnState.value.connectionState != TunnelConnectionState.CONNECTED) continue
                 val config = currentConfig ?: return@launch
                 // Baseline BEFORE the restart (the await path's pattern):
                 // a handshake racing the UP counts as this flow's.
                 tunnelUpWallMs = System.currentTimeMillis()
+                if (_vpnState.value.connectionState !=
+                    TunnelConnectionState.CONNECTED
+                ) {
+                    // Race recovery: the short wake settle can lose to
+                    // GoBackend's delayed VpnService.onDestroy, which
+                    // kills a fresh UP. Bring it straight back UP
+                    // (a fresh flow) instead of stalling.
+                    try {
+                        setBackendState(
+                            tunnel, Tunnel.State.UP, config, WAKE_SETTLE_MS
+                        )
+                    } catch (_: Exception) {
+                    }
+                    stage++
+                    continue
+                }
                 try {
                     setBackendState(tunnel, Tunnel.State.DOWN, null)
-                    setBackendState(tunnel, Tunnel.State.UP, config)
+                    setBackendState(
+                        tunnel, Tunnel.State.UP, config, WAKE_SETTLE_MS
+                    )
                     Log.d(TAG, "Birth wake: no handshake yet — flow re-roll ${stage + 1}")
                 } catch (_: Exception) {
                 }
@@ -1065,6 +1087,14 @@ class WireGuardManager(private val context: Context) {
          * tunnel. Applies only right after a DOWN; a fresh UP waits nothing.
          */
         private const val DOWN_UP_SETTLE_MS = 500L
+        /**
+         * Birth-wake settle (v1.45): the wake cycles faster than a
+         * human hand, so it cannot wait out the full 500ms settle.
+         * 150ms covers the fast path; if the delayed-onDestroy race
+         * still kills a wake UP, the wake's recovery branch brings the
+         * tunnel straight back UP instead of stalling.
+         */
+        private const val WAKE_SETTLE_MS = 150L
         /**
          * Hard backstop for backend.setState(): converts a wedged backend
          * into a clean attempt failure instead of a forever-"connecting" UI.
