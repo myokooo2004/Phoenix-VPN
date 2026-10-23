@@ -657,8 +657,9 @@ class WireGuardManager(private val context: Context) {
      * only a full restart draws a new one (the user's manual off/on
      * toggle, automated). The UI keeps its fire-and-forget "connected";
      * behind it this loop re-draws flows — full DOWN→UP restarts,
-     * faster than the user's own 4 manual toggles: 1.2s ×4, then
-     * 2.5s, then a steady 5s — until a REAL handshake lands
+     * faster than the user's own 4 manual toggles: 1.2s ×4, then a
+     * steady 2.5s — never as slow as 5s (user, 2026-10-24: the cycle
+     * must stay faster than 5s) — until a REAL handshake lands
      * ([handshakeLanded]) or data flows. It stands down the moment
      * the tunnel is warm, when the user takes over (userOverride), or
      * when polling stops (tunnel down / replaced). There is no
@@ -672,7 +673,7 @@ class WireGuardManager(private val context: Context) {
             val windows = longArrayOf(1200L, 1200L, 1200L, 1200L, 2500L)
             var stage = 0
             while (isActive) {
-                delay(if (stage < windows.size) windows[stage] else 5000L)
+                delay(if (stage < windows.size) windows[stage] else 2500L)
                 if (userOverride) return@launch
                 if (currentTunnel !== tunnel) return@launch
                 val stats = try {
