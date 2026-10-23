@@ -602,11 +602,58 @@ class WireGuardManager(private val context: Context) {
                 delay(3000)
             }
         }
+        startBirthWake(tunnel)
     }
 
     private fun stopStatsPolling() {
         statsJob?.cancel()
         statsJob = null
+        wakeJob?.cancel()
+        wakeJob = null
+    }
+
+    private var wakeJob: Job? = null
+
+    /**
+     * Birth wake (v1.39, user spec 2026-10-24): a fresh tunnel whose
+     * handshake never lands is not a dead endpoint — it is a dead NAT
+     * flow, and retransmits on that flow never recover; only a full
+     * restart draws a new one (the user's manual off/on toggle,
+     * automated). The UI keeps its fire-and-forget "connected"; behind
+     * it this loop re-draws flows — full DOWN→UP restarts on a
+     * 2.5s / 2.5s / 5s / 5s… cadence — until the first handshake rx
+     * arrives. It stands down the moment the tunnel is warm (rx > 0),
+     * when the user takes over (userOverride), or when polling stops
+     * (tunnel down / replaced). There is no give-up here and no
+     * endpoint is ever declared dead: the endpoint is alive, the
+     * flow was not. Mid-session stalls remain the watchdog's job.
+     */
+    private fun startBirthWake(tunnel: PhoenixTunnel) {
+        wakeJob?.cancel()
+        wakeJob = scope.launch(Dispatchers.IO) {
+            val windows = longArrayOf(2500L, 2500L, 5000L)
+            var stage = 0
+            while (isActive) {
+                delay(if (stage < windows.size) windows[stage] else 5000L)
+                if (userOverride) return@launch
+                if (currentTunnel !== tunnel) return@launch
+                val stats = try {
+                    backend.getStatistics(tunnel)
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                if (stats.totalRx() > 0L) return@launch // warm — job done
+                if (_vpnState.value.connectionState != TunnelConnectionState.CONNECTED) continue
+                val config = currentConfig ?: return@launch
+                try {
+                    setBackendState(tunnel, Tunnel.State.DOWN, null)
+                    setBackendState(tunnel, Tunnel.State.UP, config)
+                    Log.d(TAG, "Birth wake: no handshake yet — flow re-roll ${stage + 1}")
+                } catch (_: Exception) {
+                }
+                stage++
+            }
+        }
     }
 
     // ============================================================
@@ -637,6 +684,9 @@ class WireGuardManager(private val context: Context) {
             watchdogRebinds = 0
             return
         }
+        // Birth phase: a tunnel that has never received anything is not
+        // "stalled" — the birth wake owns it until the first handshake.
+        if (rx == 0L) return
         // rx stalled. If tx is also flat the tunnel is simply idle — leave it.
         if (tx == lastTxBytes) return
         lastTxBytes = tx

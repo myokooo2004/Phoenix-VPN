@@ -330,19 +330,16 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         pushDefaultTunnel(conf, endpointId)
         refreshUiRows()
         _ui.update { it.copy(currentMs = msFor(endpointId)) }
-        // v1.38: prove the handshake before calling this connected. The old
-        // fire-and-forget startTunnel showed CONNECTED from the backend UP
-        // state alone; on a dead NAT flow the handshake never landed and
-        // the switch sat on a fake "connected" (the 12s watchdog was the
-        // only rescue). Re-roll the tapped endpoint first (explicit choice
-        // wins), then fall over to any working endpoint, else stop honestly.
-        _ui.update { it.copy(statusLine = "Connecting… $endpointId") }
-        val ok = awaitHandshakeWithReroll(manager.tunnelNameFor(endpointId), cfg)
-        if (ok) return
-        if (!connectWithFailover(conf, excludeId = endpointId)) {
-            // Quiet cleanup: the user did NOT manually stop.
-            VpnForegroundService.stopQuiet(app)
-            message("No working endpoint found")
+        // Fire-and-forget, as the user wants it: the switch shows
+        // connected immediately. The handshake is NOT awaited here —
+        // since v1.39 the manager's birth wake owns persistence: it
+        // keeps re-drawing flows behind the "connected" UI until the
+        // first handshake lands on the endpoint the user picked. No
+        // failover away from an explicit choice, no fake-idle wait.
+        manager.startTunnel(manager.tunnelNameFor(endpointId), cfg)
+        if (vpnState.value.connectionState == TunnelConnectionState.ERROR) {
+            message(vpnState.value.errorMessage ?: "Connection failed")
+            _ui.update { it.copy(statusLine = null) }
         }
     }
 
