@@ -607,36 +607,6 @@ fun HomeScreen(viewModel: VpnViewModel) {
         }
     }
 
-    // NOTE: the ⋯ menu (refresh/about/app info) was removed in v1.26 —
-    // the about dialog is intentionally gone.
-}
-
-private data class Quad(val text: String, val color: Color, val dot: Color, val glow: Boolean)
-
-@Composable
-private fun AppBar() {
-    var logOpen by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "ဖီးနစ်",
-            color = TextPrimary,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily(Font(R.font.noto_serif_myanmar_bold)),
-            letterSpacing = 0.3.sp,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = "Log",
-            color = Teal,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.clickable { logOpen = true }.padding(4.dp)
-        )
-    }
     // In-app update dialog (v1.46): check → download → install, all
     // inside the app — the browser is never involved. READY closes
     // the dialog; MainActivity opens the system installer.
@@ -781,6 +751,36 @@ private fun AppBar() {
         }
     }
 
+    // NOTE: the ⋯ menu (refresh/about/app info) was removed in v1.26 —
+    // the about dialog is intentionally gone.
+}
+
+private data class Quad(val text: String, val color: Color, val dot: Color, val glow: Boolean)
+
+@Composable
+private fun AppBar() {
+    var logOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "ဖီးနစ်",
+            color = TextPrimary,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily(Font(R.font.noto_serif_myanmar_bold)),
+            letterSpacing = 0.3.sp,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = "Log",
+            color = Teal,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clickable { logOpen = true }.padding(4.dp)
+        )
+    }
     if (logOpen) {
         LogDialog(onDismiss = { logOpen = false })
     }
