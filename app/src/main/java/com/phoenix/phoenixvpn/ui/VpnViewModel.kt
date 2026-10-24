@@ -159,7 +159,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
         uiPrefs.edit().putLong("update_last_check", now).apply()
         viewModelScope.launch {
-            val info = UpdateService.fetchLatest(application).getOrNull()
+            val info = UpdateService.fetchLatest(getApplication()).getOrNull()
                 ?: return@launch
             val installed = installedVersionName() ?: return@launch
             if (!UpdateService.isNewer(info.version, installed)) return@launch
@@ -173,8 +173,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun installedVersionName(): String? = try {
         @Suppress("DEPRECATION")
-        application.packageManager
-            .getPackageInfo(application.packageName, 0)
+        getApplication<Application>().packageManager
+            .getPackageInfo(getApplication<Application>().packageName, 0)
             .versionName
     } catch (_: Exception) {
         null
@@ -186,8 +186,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         if (_update.value.phase == UpdatePhase.DOWNLOADING) return
         _update.value = UpdateUiState(UpdatePhase.DOWNLOADING, info.version, 0)
         updateJob = viewModelScope.launch {
-            val dir = File(application.cacheDir, "updates")
-            UpdateService.download(application, info, dir) { pct ->
+            val dir = File(getApplication<Application>().cacheDir, "updates")
+            UpdateService.download(getApplication(), info, dir) { pct ->
                 _update.update {
                     if (it.phase == UpdatePhase.DOWNLOADING) {
                         it.copy(progress = pct)
