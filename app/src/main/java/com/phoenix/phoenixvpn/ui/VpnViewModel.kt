@@ -12,6 +12,8 @@ import com.phoenix.phoenixvpn.analytics.Analytics
 import com.phoenix.phoenixvpn.network.ConfigService
 import com.phoenix.phoenixvpn.network.EndpointInfo
 import com.phoenix.phoenixvpn.network.EndpointService
+import com.phoenix.phoenixvpn.network.UpdateService
+import java.io.File
 import com.phoenix.phoenixvpn.vpn.EndpointStore
 import com.phoenix.phoenixvpn.vpn.TunnelConnectionState
 import com.phoenix.phoenixvpn.vpn.VpnForegroundService
@@ -121,6 +123,133 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _batteryExemptionConfirmed.value = true
             uiPrefs.edit().putBoolean("battery_exemption_confirmed", true).apply()
         }
+    }
+
+    // ============================================================
+    //  In-app update (v1.46) — check GitHub releases, download the
+    //  APK inside the app (never the browser), hand the file to
+    //  the system installer. One tap on UPDATE does everything.
+    // ============================================================
+
+    enum class UpdatePhase { IDLE, AVAILABLE, DOWNLOADING, READY, ERROR }
+
+    data class UpdateUiState(
+        val phase: UpdatePhase = UpdatePhase.IDLE,
+        val version: String? = null,
+        val progress: Int = 0,
+        val message: String? = null
+    )
+
+    private val _update = MutableStateFlow(UpdateUiState())
+    val update: StateFlow<UpdateUiState> = _update.asStateFlow()
+
+    /** One-shot hand-off to MainActivity, which owns the intents. */
+    private val _installRequest = MutableStateFlow<File?>(null)
+    val installRequest: StateFlow<File?> = _installRequest.asStateFlow()
+
+    private var updateJob: Job? = null
+    private var latestRelease: UpdateService.ReleaseInfo? = null
+    private var pendingApk: File? = null
+
+    /** Throttled (6h) release check, called from MainActivity.onCreate. */
+    fun checkForUpdate() {
+        val now = System.currentTimeMillis()
+        if (now - uiPrefs.getLong("update_last_check", 0L) < 6 * 60 * 60 * 1000L) {
+            return
+        }
+        uiPrefs.edit().putLong("update_last_check", now).apply()
+        viewModelScope.launch {
+            val info = UpdateService.fetchLatest(application).getOrNull()
+                ?: return@launch
+            val installed = installedVersionName() ?: return@launch
+            if (!UpdateService.isNewer(info.version, installed)) return@launch
+            if (uiPrefs.getString("update_dismissed", null) == info.version) {
+                return@launch
+            }
+            latestRelease = info
+            _update.value = UpdateUiState(UpdatePhase.AVAILABLE, info.version)
+        }
+    }
+
+    private fun installedVersionName(): String? = try {
+        @Suppress("DEPRECATION")
+        application.packageManager
+            .getPackageInfo(application.packageName, 0)
+            .versionName
+    } catch (_: Exception) {
+        null
+    }
+
+    /** UPDATE tap: download with progress, then hand off to the installer. */
+    fun startUpdate() {
+        val info = latestRelease ?: return
+        if (_update.value.phase == UpdatePhase.DOWNLOADING) return
+        _update.value = UpdateUiState(UpdatePhase.DOWNLOADING, info.version, 0)
+        updateJob = viewModelScope.launch {
+            val dir = File(application.cacheDir, "updates")
+            UpdateService.download(application, info, dir) { pct ->
+                _update.update {
+                    if (it.phase == UpdatePhase.DOWNLOADING) {
+                        it.copy(progress = pct)
+                    } else {
+                        it
+                    }
+                }
+            }.fold(
+                onSuccess = { file ->
+                    pendingApk = file
+                    _update.value =
+                        UpdateUiState(UpdatePhase.READY, info.version, 100)
+                    _installRequest.value = file
+                },
+                onFailure = { e ->
+                    _update.value = UpdateUiState(
+                        UpdatePhase.ERROR, info.version, 0,
+                        e.message ?: "Download failed"
+                    )
+                }
+            )
+        }
+    }
+
+    fun cancelUpdate() {
+        updateJob?.cancel()
+        _update.value =
+            UpdateUiState(UpdatePhase.AVAILABLE, latestRelease?.version)
+    }
+
+    /** "Later": don't nag again for this version (a newer one re-prompts). */
+    fun dismissUpdate() {
+        latestRelease?.version?.let { v ->
+            uiPrefs.edit().putString("update_dismissed", v).apply()
+        }
+        _update.value = UpdateUiState()
+    }
+
+    /** Close without recording a dismissal (e.g. after an error). */
+    fun closeUpdate() {
+        _update.value = UpdateUiState()
+    }
+
+    fun consumeInstallRequest() {
+        _installRequest.value = null
+    }
+
+    /**
+     * MainActivity.onResume: an APK is downloaded and waiting, but the
+     * one-time "allow installs" system grant was missing — re-emit so
+     * the installer can open as soon as the grant exists.
+     */
+    fun retryPendingInstall() {
+        val f = pendingApk ?: return
+        if (_update.value.phase != UpdatePhase.READY) return
+        _installRequest.value = null
+        _installRequest.value = f
+    }
+
+    fun onInstallerLaunched() {
+        pendingApk = null
+        _update.value = UpdateUiState()
     }
 
     private var connectJob: Job? = null

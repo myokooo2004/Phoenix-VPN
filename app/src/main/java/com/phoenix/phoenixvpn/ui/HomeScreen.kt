@@ -637,6 +637,150 @@ private fun AppBar() {
             modifier = Modifier.clickable { logOpen = true }.padding(4.dp)
         )
     }
+    // In-app update dialog (v1.46): check → download → install, all
+    // inside the app — the browser is never involved. READY closes
+    // the dialog; MainActivity opens the system installer.
+    val update by viewModel.update.collectAsState()
+    if (update.phase == VpnViewModel.UpdatePhase.AVAILABLE ||
+        update.phase == VpnViewModel.UpdatePhase.DOWNLOADING ||
+        update.phase == VpnViewModel.UpdatePhase.ERROR
+    ) {
+        Dialog(
+            onDismissRequest = {
+                if (update.phase != VpnViewModel.UpdatePhase.DOWNLOADING) {
+                    viewModel.closeUpdate()
+                }
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Surface)
+                    .border(1.dp, SheetBorder, RoundedCornerShape(24.dp))
+                    .padding(24.dp)
+            ) {
+                Text(
+                    text = "Update available",
+                    color = TextPrimary,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Phoenix VPN v${update.version ?: ""}",
+                    color = Teal,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                when (update.phase) {
+                    VpnViewModel.UpdatePhase.AVAILABLE -> {
+                        Text(
+                            text = "A new version is ready. Tap UPDATE — " +
+                                "the app downloads and installs it for you.",
+                            color = TextSecondary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 20.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { viewModel.dismissUpdate() }) {
+                                Text(
+                                    "LATER",
+                                    color = TextSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = { viewModel.startUpdate() }) {
+                                Text(
+                                    "UPDATE",
+                                    color = Teal,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                    VpnViewModel.UpdatePhase.DOWNLOADING -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 20.dp)
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(SheetBorder)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(update.progress / 100f)
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(Teal)
+                            )
+                        }
+                        Text(
+                            text = "Downloading… ${update.progress}%",
+                            color = TextSecondary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 16.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { viewModel.cancelUpdate() }) {
+                                Text(
+                                    "CANCEL",
+                                    color = TextSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                    else -> {
+                        Text(
+                            text = update.message ?: "Download failed",
+                            color = TextSecondary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 20.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { viewModel.closeUpdate() }) {
+                                Text(
+                                    "CLOSE",
+                                    color = TextSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = { viewModel.startUpdate() }) {
+                                Text(
+                                    "RETRY",
+                                    color = Teal,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if (logOpen) {
         LogDialog(onDismiss = { logOpen = false })
     }

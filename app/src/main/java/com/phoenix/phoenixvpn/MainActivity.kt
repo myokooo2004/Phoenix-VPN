@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import androidx.core.content.FileProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -96,9 +97,69 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // In-app update: the VM hands over a downloaded APK; this
+        // activity owns the installer / install-permission intents.
+        lifecycleScope.launch {
+            viewModel.installRequest.collect { file ->
+                if (file != null) {
+                    viewModel.consumeInstallRequest()
+                    launchInstaller(file)
+                }
+            }
+        }
+        viewModel.checkForUpdate()
+
         setContent {
             PhoenixVpnTheme {
                 HomeScreen(viewModel = viewModel)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Back from the one-time "allow installs" settings screen:
+        // if an APK is waiting and the grant now exists, install it.
+        viewModel.retryPendingInstall()
+    }
+
+    /**
+     * Hand a downloaded update APK to the system installer — one tap
+     * on UPDATE in the dialog leads straight here. The only detour
+     * Android forces is its one-time "allow installs from this app"
+     * grant; after that, every update goes directly.
+     */
+    private fun launchInstaller(file: java.io.File) {
+        if (packageManager.canRequestPackageInstalls()) {
+            try {
+                val uri = FileProvider.getUriForFile(
+                    this, "$packageName.fileprovider", file
+                )
+                startActivity(
+                    Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(
+                            uri,
+                            "application/vnd.android.package-archive"
+                        )
+                        .addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_ACTIVITY_NEW_TASK
+                        )
+                )
+                viewModel.onInstallerLaunched()
+            } catch (_: Exception) {
+                // Installer could not open; the dialog already closed —
+                // the next app open re-checks and offers it again.
+            }
+        } else {
+            try {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:$packageName")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (_: Exception) {
             }
         }
     }
