@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Hand a downloaded update APK to the system installer — one tap
-     * on UPDATE in the dialog leads straight here. The only detour
+     * on UPDATE in the banner leads straight here. The only detour
      * Android forces is its one-time "allow installs from this app"
      * grant; after that, every update goes directly.
      */

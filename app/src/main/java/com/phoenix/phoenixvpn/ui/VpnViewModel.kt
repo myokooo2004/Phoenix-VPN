@@ -151,21 +151,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private var latestRelease: UpdateService.ReleaseInfo? = null
     private var pendingApk: File? = null
 
-    /** Throttled (6h) release check, called from MainActivity.onCreate. */
+    /** Release check on every app open (v1.47: no throttle — show immediately). */
     fun checkForUpdate() {
-        val now = System.currentTimeMillis()
-        if (now - uiPrefs.getLong("update_last_check", 0L) < 6 * 60 * 60 * 1000L) {
-            return
-        }
-        uiPrefs.edit().putLong("update_last_check", now).apply()
         viewModelScope.launch {
             val info = UpdateService.fetchLatest(getApplication()).getOrNull()
                 ?: return@launch
             val installed = installedVersionName() ?: return@launch
             if (!UpdateService.isNewer(info.version, installed)) return@launch
-            if (uiPrefs.getString("update_dismissed", null) == info.version) {
-                return@launch
-            }
+            // v1.47: no dismissal — the banner stays until the update is
+            // installed, on every app open.
             latestRelease = info
             _update.value = UpdateUiState(UpdatePhase.AVAILABLE, info.version)
         }
@@ -216,14 +210,6 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         updateJob?.cancel()
         _update.value =
             UpdateUiState(UpdatePhase.AVAILABLE, latestRelease?.version)
-    }
-
-    /** "Later": don't nag again for this version (a newer one re-prompts). */
-    fun dismissUpdate() {
-        latestRelease?.version?.let { v ->
-            uiPrefs.edit().putString("update_dismissed", v).apply()
-        }
-        _update.value = UpdateUiState()
     }
 
     /** Close without recording a dismissal (e.g. after an error). */

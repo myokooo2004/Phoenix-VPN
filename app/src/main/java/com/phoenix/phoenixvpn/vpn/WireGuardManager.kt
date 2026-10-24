@@ -591,6 +591,7 @@ class WireGuardManager(private val context: Context) {
         lastTxBytes = -1L
         lastRxProgressAt = System.currentTimeMillis()
         watchdogRebinds = 0
+        lastStaleRedrawAt = 0L
         tunnelUpWallMs = System.currentTimeMillis()
         _vpnState.update { it.copy(handshakeLive = false, livePingMs = null) }
         statsJob = scope.launch(Dispatchers.IO) {
@@ -614,6 +615,7 @@ class WireGuardManager(private val context: Context) {
                             )
                         }
                         watchdogCheck(rx, tx)
+                        staleHandshakeCheck(stats)
                     }
                 } catch (_: Exception) {}
                 delay(3000)
@@ -741,6 +743,7 @@ class WireGuardManager(private val context: Context) {
     private var lastTxBytes: Long = -1L
     private var lastRxProgressAt: Long = 0L
     private var watchdogRebinds: Int = 0
+    private var lastStaleRedrawAt: Long = 0L
 
     private suspend fun watchdogCheck(rx: Long, tx: Long) {
         val now = System.currentTimeMillis()
@@ -787,6 +790,40 @@ class WireGuardManager(private val context: Context) {
                     "flow re-roll $watchdogRebinds/$WATCHDOG_MAX_REBINDS")
         } catch (e: Exception) {
             Log.e(TAG, "Watchdog re-roll failed", e)
+        }
+    }
+
+    /**
+     * Stale-handshake watchdog (v1.47): the rx-stall watchdog watches traffic
+     * counters, but WireGuard's own liveness signal is the handshake clock —
+     * after RejectAfterTime (180s) without a handshake the session keys are
+     * rejected by the protocol itself. Once a real handshake has landed in
+     * this session (birth wake owns birth), a handshake older than
+     * STALE_HANDSHAKE_MS while CONNECTED means the flow is dead, however
+     * the counters look. Re-draw it (real DOWN→UP, same endpoint, fresh
+     * flow — the automated manual toggle). No cap: re-draws repeat every
+     * STALE_REDRAW_COOLDOWN_MS until a handshake lands, and never declare
+     * the endpoint dead — persistence on the chosen endpoint beats failover.
+     * User override (manual-off) is never fought.
+     */
+    private suspend fun staleHandshakeCheck(stats: Statistics) {
+        if (!_vpnState.value.handshakeLive) return
+        if (_vpnState.value.connectionState != TunnelConnectionState.CONNECTED) return
+        if (userOverride) return
+        val hs = latestHandshakeEpoch(stats)
+        if (hs <= 0L) return
+        val now = System.currentTimeMillis()
+        if (now - hs < STALE_HANDSHAKE_MS) return
+        if (now - lastStaleRedrawAt < STALE_REDRAW_COOLDOWN_MS) return
+        val tunnel = currentTunnel ?: return
+        val config = currentConfig ?: return
+        lastStaleRedrawAt = now
+        try {
+            setBackendState(tunnel, Tunnel.State.DOWN, null)
+            setBackendState(tunnel, Tunnel.State.UP, config)
+            Log.d(TAG, "Watchdog: handshake stale ${STALE_HANDSHAKE_MS}ms — flow re-draw (auto-toggle)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Watchdog stale re-draw failed", e)
         }
     }
 
@@ -1081,6 +1118,13 @@ class WireGuardManager(private val context: Context) {
         private const val WATCHDOG_STALL_MS = 12_000L
         /** Max re-handshakes per stall episode (resets when rx moves again). */
         private const val WATCHDOG_MAX_REBINDS = 3
+        /**
+         * Stale-handshake trigger (v1.47): WireGuard's RejectAfterTime — a
+         * session with no handshake for this long is protocol-dead.
+         */
+        private const val STALE_HANDSHAKE_MS = 180_000L
+        /** Minimum gap between stale re-draws (the new flow's proving time). */
+        private const val STALE_REDRAW_COOLDOWN_MS = 30_000L
         /**
          * DOWN→UP settle: lets a torn-down VpnService's delayed onDestroy()
          * finish before the next establish(), so it can't kill the fresh
